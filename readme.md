@@ -73,7 +73,7 @@ Adding --player reserves a human slot on top of the AI players, so --player with
 
 Scripts have full information: they can read the state of every planet (including ownership and ship count) and see every ship in transit. The only hidden state is the other players' offense factors.
 
-- Read: planets(), ships(), myId(), myOffense(), gameTick(), mapWidth(), mapHeight(), selection()
+- Read: planets() (id, x, y, radius, owner, ships, growth), ships() (owner, target, x, y, heading), inbound(planetId) or inbound(planetId, ownerId) for counting ships in flight at a planet, myId(), myOffense(), gameTick(), mapWidth(), mapHeight(), selection()
 
 Their actions mirror the human controls:
 

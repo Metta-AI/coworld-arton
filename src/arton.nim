@@ -72,6 +72,17 @@ proc maxTicksFlag(): int32 =
     if param.startsWith("--maxTicks="):
       result = int32(parseInt(param.split("=")[1]))
 
+proc planetsFlag(playerCount: int32): int32 =
+  ## Planet count from --planets:N (or --planets=N), never below the
+  ## player count so everyone still gets a home planet.
+  result = DefaultPlanetCount
+  for param in commandLineParams():
+    if param.startsWith("--planets") and param.len > 10:
+      let sep = param[9]
+      if sep == ':' or sep == '=':
+        result = int32(parseInt(param[10 .. ^1]))
+  result = max(result, playerCount)
+
 proc aiPlayerCount(): int32 =
   ## Players in the game: every --ai flag adds an AI player and every
   ## --player flag adds a human slot, at least two players total.
@@ -357,12 +368,15 @@ proc runHeadless(shotPath: string) =
       demo = true
   sim = newSim(initSimConfig(
     seed = seed,
+    planetCount = planetsFlag(aiPlayerCount()),
     playerCount = aiPlayerCount(),
     maxTicks = maxTicksFlag()
   ))
   aiAgents = loadAgents(sim.config.playerCount)
   if ticks == -1:
     ticks = int(sim.config.maxTicks)
+  echo "map: ", sim.config.planetCount, " planets, ",
+    sim.config.playerCount, " players"
   echo "game speed: as fast as possible, one game second is ",
     TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
     " (", gameClock(sim.config.maxTicks), ")"
@@ -432,12 +446,15 @@ block:
 
 sim = newSim(initSimConfig(
   seed = 1,
+  planetCount = planetsFlag(aiPlayerCount()),
   playerCount = aiPlayerCount(),
   maxTicks = maxTicksFlag()
 ))
 aiAgents = loadAgents(sim.config.playerCount)
 let speedMultiplier = speedFlag()
 hudSpeed = speedMultiplier
+echo "map: ", sim.config.planetCount, " planets, ",
+  sim.config.playerCount, " players"
 echo "game speed: ", speedMultiplier, "x, one game second is ",
   TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
   " (", gameClock(sim.config.maxTicks), ")"

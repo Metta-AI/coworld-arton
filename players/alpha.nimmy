@@ -33,12 +33,6 @@ proc playerTotal(id) =
       total = total + planet.ships
   return total
 
-proc alreadyAttacking(targetId) =
-  var count = 0
-  for ship in ships():
-    if ship.owner == myId() and ship.target == targetId:
-      count = count + 1
-  return count
 
 proc strikeGroup(x, y) =
   # Up to three of our planets closest to the target.
@@ -148,9 +142,11 @@ proc tick() =
 
   # Expand: take cost effective neutrals as fast as we can win them.
   # Targets already being taken are skipped, not waited on, so many
-  # captures can be in the air at once.
+  # captures can be in the air at once. Neutrals that anyone else is
+  # already flying at are skipped too: no point stacking onto the
+  # same cheap planet everyone noticed at once.
   for targetId in neutralTargets():
-    if alreadyAttacking(targetId) == 0:
+    if inbound(targetId) == 0:
       if tryAttack(findPlanet(targetId)):
         return
 
@@ -166,7 +162,7 @@ proc tick() =
   # else already started on them, or in a duel where nobody else is
   # ever coming to start the fight for us.
   for targetId in enemyTargets():
-    if alreadyAttacking(targetId) == 0:
+    if inbound(targetId, myId()) == 0:
       let enemy = findPlanet(targetId)
       var allowed = false
       if playerTotal(myId()) > playerTotal(enemy.owner) + 10:

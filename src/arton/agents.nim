@@ -88,6 +88,23 @@ proc register(agent: Agent) =
       arr.add(shipValue(ship))
     arrayValue(arr)
 
+  agent.vm.addProc("inbound") do (args: seq[Value]) -> Value:
+    # inbound(planetId) counts every ship flying at the planet.
+    # inbound(planetId, ownerId) counts one player's ships. Counting
+    # natively keeps scripts fast and simple.
+    if args.len < 1:
+      return intValue(0)
+    let target = intArg(args[0])
+    var owner = -1'i64
+    if args.len >= 2:
+      owner = intArg(args[1])
+    var count = 0'i64
+    for ship in agent.live[].ships:
+      if int64(ship.targetPlanet) == target:
+        if owner == -1 or int64(ship.ownerId) == owner:
+          inc count
+    intValue(count)
+
   agent.vm.addProc("myId") do (args: seq[Value]) -> Value:
     intValue(int64(agent.playerId))
 
