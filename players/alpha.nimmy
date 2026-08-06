@@ -85,10 +85,12 @@ proc neutralTargets() =
     if planet.owner == 0:
       let d = nearestOwnDist(planet.x, planet.y)
       # Heavy distance penalty, two ships per pixel: expanding next
-      # door beats shipping across the map, always.
+      # door beats shipping across the map, always. Growth counts
+      # squared, so a big planet is worth paying for and a slow
+      # small one rarely is.
       let base = planet.ships + 4 + d * 2
       ids.add(planet.id)
-      scores.add(base * planet.growth)
+      scores.add(base * planet.growth * planet.growth)
   var order = []
   for round in 0 ..< len(ids):
     var bestIndex = -1
