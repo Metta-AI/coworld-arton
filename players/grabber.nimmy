@@ -1,0 +1,35 @@
+# Baseline bot. Every few seconds the strongest planet attacks the
+# nearest planet it does not own.
+
+proc tick() =
+  if gameTick() % 240 != 0:
+    return
+
+  var best = -1
+  var bestShips = 0
+  var bestX = 0
+  var bestY = 0
+  for planet in planets():
+    if planet.owner == myId() and planet.ships > bestShips:
+      best = planet.id
+      bestShips = planet.ships
+      bestX = planet.x
+      bestY = planet.y
+  if best == -1:
+    return
+
+  var target = -1
+  var bestDist = 999999999
+  for planet in planets():
+    if planet.owner != myId():
+      let dx = planet.x - bestX
+      let dy = planet.y - bestY
+      let dist = dx * dx + dy * dy
+      if dist < bestDist:
+        bestDist = dist
+        target = planet.id
+  if target == -1:
+    return
+
+  select([best])
+  sendTo(target)

@@ -1,4 +1,4 @@
-import std/unittest, arton/sims
+import std/unittest, arton/agents, arton/sims
 
 proc makePlanet(id, x, y: int32, size: PlanetSize,
     ownerId, ships: int32): Planet =
@@ -360,7 +360,97 @@ suite "win and draw":
     check sim.outcome == MatchWon
     check sim.winner == 1
 
-suite "determinism":
+suite "agents":
+  proc twoPlanetSim(): Sim =
+    ## Player 1 with a strong planet next to a weak neutral.
+    return makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 40),
+        makePlanet(1, 500, 360, PlanetSmall, NeutralOwner, 5),
+        makePlanet(2, 900, 100, PlanetSmall, NeutralOwner, 5)
+      ],
+      @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
+    )
+
+  test "script can select and send":
+    var sim = twoPlanetSim()
+    let agent = newAgent(1, """
+proc tick() =
+  if gameTick() == 0:
+    selectAll()
+    sendTo(1)
+""")
+    check not agent.failed
+    agent.step(sim)
+    check sim.waves.len == 1
+    check sim.waves[0].targetPlanet == 1
+    check sim.waves[0].shipsLeft == 40
+
+  test "script reads planets and sets offense":
+    var sim = twoPlanetSim()
+    let agent = newAgent(1, """
+proc tick() =
+  var mine = 0
+  for planet in planets():
+    if planet.owner == myId():
+      mine = mine + 1
+  if mine == 1:
+    setOffense(30)
+""")
+    agent.step(sim)
+    check not agent.failed
+    check sim.players[0].offenseFactor == 30
+
+  test "selection only takes own planets":
+    var sim = twoPlanetSim()
+    let agent = newAgent(1, """
+proc tick() =
+  select([0, 1, 2])
+  sendTo(1)
+""")
+    agent.step(sim)
+    check not agent.failed
+    check sim.waves.len == 1
+
+  test "broken script disables the agent without crashing":
+    var sim = twoPlanetSim()
+    let agent = newAgent(1, """
+proc tick() =
+  explode()
+""")
+    check not agent.failed
+    agent.step(sim)
+    check agent.failed
+    check agent.error.len > 0
+    agent.step(sim)
+    check sim.waves.len == 0
+
+  test "grabber bot plays a whole match":
+    var sim = twoPlanetSim()
+    let agent = newAgent(1, readFile("players/grabber.nimmy"))
+    check not agent.failed
+    for i in 0 ..< 6000:
+      if sim.tickCount mod AgentIntervalTicks == 0:
+        agent.step(sim)
+      sim.tick()
+    check not agent.failed
+    var owned = 0
+    for planet in sim.planets:
+      if planet.ownerId == 1:
+        inc owned
+    check owned == 3
+    check sim.outcome == MatchWon
+
+  test "agent driven matches are deterministic":
+    proc playSim(): Sim =
+      var sim = twoPlanetSim()
+      let agent = newAgent(1, readFile("players/grabber.nimmy"))
+      for i in 0 ..< 2000:
+        if sim.tickCount mod AgentIntervalTicks == 0:
+          agent.step(sim)
+        sim.tick()
+      return sim
+    check playSim().stateHash() == playSim().stateHash()
   test "same seed stays identical over 600 ticks":
     var
       simA = newSim(initSimConfig(seed = 42))

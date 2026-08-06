@@ -5,7 +5,7 @@
 import
   std/[math, os, strformat, strutils, times],
   boxy, bumpy, opengl, pixie, windy,
-  arton/sims
+  arton/agents, arton/sims
 
 const
   FontPath = "data/IBMPlexSans-Regular.ttf"
@@ -33,6 +33,7 @@ const
 
 var
   sim: Sim
+  aiAgents: seq[Agent]
   selected: seq[int32]
   dragStart: Vec2
   dragging = false
@@ -40,6 +41,31 @@ var
   suppressClick = false
   demoEnabled = false
   shotIndex = 0
+
+proc loadAgents(): seq[Agent] =
+  ## Loads nimmy AI scripts from --ai<player>=path arguments, for
+  ## example --ai2=players/grabber.nimmy.
+  for param in commandLineParams():
+    if param.startsWith("--ai") and "=" in param:
+      let
+        parts = param.split("=")
+        playerId = int32(parseInt(parts[0][4 .. ^1]))
+        agent = newAgent(playerId, readFile(parts[1]))
+      if agent.failed:
+        echo "AI for player ", playerId, " failed to load: ", agent.error
+      else:
+        echo "AI for player ", playerId, ": ", parts[1]
+      result.add(agent)
+
+proc stepAgents(sim: var Sim) =
+  ## Runs every AI script on its fixed cadence.
+  if sim.tickCount mod AgentIntervalTicks != 0:
+    return
+  for agent in aiAgents:
+    let wasFailed = agent.failed
+    agent.step(sim)
+    if agent.failed and not wasFailed:
+      echo "AI for player ", agent.playerId, " crashed: ", agent.error
 
 proc fillColor(ownerId: int32): ColorRGBA =
   ## Planet fill color for an owner.
@@ -273,10 +299,12 @@ proc headlessShot() =
     elif param == "--demo":
       demo = true
   sim = newSim(initSimConfig(seed = seed))
+  aiAgents = loadAgents()
   for i in 0 ..< ticks:
     if demo:
       for player in 1'i32 .. sim.config.playerCount:
         sim.demoOrders(player)
+    stepAgents(sim)
     sim.tick()
   let frame = sim.renderFrame(@[], rect(0, 0, 0, 0), false, -1, @[])
   frame.writeFile(shotPath)
@@ -300,6 +328,7 @@ for param in commandLineParams():
     headlessShot()
 
 sim = newSim(initSimConfig(seed = 1))
+aiAgents = loadAgents()
 
 let window = newWindow(
   "Arton",
@@ -450,6 +479,7 @@ proc stepSim() =
     if demoEnabled:
       for player in 2'i32 .. sim.config.playerCount:
         sim.demoOrders(player)
+    stepAgents(sim)
     sim.tick()
   var keep: seq[int32]
   for planetId in selected:

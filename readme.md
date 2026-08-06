@@ -61,13 +61,21 @@ A player wins by taking every planet in single player, or every non-neutral plan
 
 ## AI interface
 
+AI scripts are written in nimmy. Each script is a single .nimmy file in the players/ folder and drives one player. A script defines a tick() proc that is called on a fixed cadence, every 15 simulation ticks. Run a match against one with:
+
+    nim r src/arton.nim --ai2=players/grabber.nimmy
+
 Scripts have full information: they can read the state of every planet (including ownership and ship count) and see every ship in transit. The only hidden state is the other players' offense factors.
+
+- Read: planets(), ships(), myId(), myOffense(), gameTick(), mapWidth(), mapHeight(), selection()
 
 Their actions mirror the human controls:
 
-- Select planets (any amount)
-- Send to planet (only one at a time)
-- Change their offense factor
+- select(ids) selects any amount of own planets, selectAll() selects everything owned
+- sendTo(planetId) sends from the whole selection, to one planet at a time
+- setOffense(percent) changes the offense factor, 10 to 100
+
+A script that raises an error is disabled for the rest of the match. The player keeps producing ships but goes idle.
 
 ## Art direction
 
@@ -154,7 +162,7 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
 
 ## Phase 2: Browser build
 
-- [ ] Emscripten WASM compilation
+- [x] Emscripten WASM compilation
   - windy window + OpenGL context working in the browser
   - Native and WASM builds produce identical simulations (verify with a seeded replay hash)
   - Runs at interactive framerate

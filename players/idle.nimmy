@@ -1,0 +1,4 @@
+# The baseline pacifist. Does nothing, produces ships and waits.
+
+proc tick() =
+  return
