@@ -12,11 +12,18 @@
 
 import
   std/tables,
-  nimmy,
+  nimmy, nimmy/parser, nimmy/vm,
   sims
 
 const
   AgentIntervalTicks* = 15'i32
+  ## Instruction budget per turn. A script that runs longer is paused
+  ## and resumes exactly where it stopped on its next turn, so a
+  ## while true loop cannot take out the game, it only stalls its own
+  ## player. Scripts that finish normally get a fresh tick() call.
+  AgentOpsPerTurn* = 1000
+  ## Budget for the script's top level when it first loads.
+  AgentInitOps* = 100000
 
 type
   Agent* = ref object
@@ -27,9 +34,13 @@ type
     ## Count of action calls the script made: select, selectAll,
     ## sendTo and setOffense.
     actions*: int
+    ## Instructions executed and turns taken, for the stats report.
+    ops*: int64
+    turns*: int
     failed*: bool
     error*: string
     vm: NimmyVM
+    tickAst: Node
     sim: ptr Sim
 
 proc intArg(value: Value): int64 =
@@ -173,17 +184,26 @@ proc newAgent*(playerId: int32, source: string): Agent =
   ## must define tick(). A broken script disables the agent.
   let agent = Agent(playerId: playerId, vm: newNimmyVM())
   agent.register()
-  # The api is not available at the top level, only inside tick().
+  agent.tickAst = parse("tick()")
   try:
-    discard agent.vm.run(source)
+    agent.vm.vm.load(parse(source))
+    var ops = 0
+    while not agent.vm.vm.isFinished and ops < AgentInitOps:
+      agent.vm.vm.step()
+      inc ops
+    if not agent.vm.vm.isFinished:
+      agent.failed = true
+      agent.error = "script top level exceeded " & $AgentInitOps &
+        " instructions"
   except CatchableError as e:
     agent.failed = true
     agent.error = e.msg
   return agent
 
 proc step*(agent: Agent, sim: var Sim) =
-  ## Runs one AI decision by calling the script's tick() proc.
-  ## Script errors disable the agent for the rest of the match.
+  ## Runs one AI turn with an instruction budget. A finished script
+  ## gets a fresh tick() call, a paused one resumes right where it
+  ## stopped last turn. Script errors disable the agent.
   if agent.failed or sim.outcome != MatchOngoing:
     return
   agent.sim = addr sim
@@ -193,8 +213,16 @@ proc step*(agent: Agent, sim: var Sim) =
     if sim.planets[planetId].ownerId == agent.playerId:
       keep.add(planetId)
   agent.selected = keep
+  inc agent.turns
   try:
-    discard agent.vm.run("tick()")
+    if agent.vm.vm.isFinished:
+      agent.vm.vm.load(agent.tickAst)
+    var ops = 0
+    while ops < AgentOpsPerTurn and not agent.vm.vm.isFinished:
+      agent.vm.vm.step()
+      inc ops
+      inc agent.ops
+    agent.vm.vm.clearOutput()
   except CatchableError as e:
     agent.failed = true
     agent.error = e.msg

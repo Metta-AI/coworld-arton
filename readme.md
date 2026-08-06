@@ -83,6 +83,8 @@ Their actions mirror the human controls:
 
 A script that raises an error is disabled for the rest of the match. The player keeps producing ships but goes idle.
 
+Every turn a script gets a budget of 1000 instructions. A script that runs longer is paused and resumes exactly where it stopped on its next turn, while the game keeps going, so slow scripts just skip decisions and an infinite loop only stalls its own player. A script that finishes normally gets a fresh tick() call next turn.
+
 Scripts are fully deterministic: the embedded nimmy build has floats disabled (use div and isqrt for math) and there is no built in randomness. A script that wants randomness brings its own seeded pseudo random generator.
 
 ## Art direction

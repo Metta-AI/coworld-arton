@@ -409,17 +409,27 @@ proc runHeadless(shotPath: string) =
     var
       note = ""
       actions = 0
+      ops = 0'i64
+      turns = 0
     for agent in aiAgents:
       if agent.playerId == player.id:
         actions = agent.actions
+        ops = agent.ops
+        turns = agent.turns
         if agent.failed:
           note = "  CRASHED: " & agent.error
     echo "player ", player.id, ": ", planetCount, " planets, ",
-      shipCount, " ships, ", actions, " actions", note
-  var totalActions = 0
+      shipCount, " ships, ", actions, " actions, ", ops,
+      " instructions (avg ", ops div max(int64(turns), 1),
+      " per turn)", note
+  var
+    totalActions = 0
+    totalOps = 0'i64
   for agent in aiAgents:
     totalActions += agent.actions
-  echo "total actions: ", totalActions
+    totalOps += agent.ops
+  echo "total actions: ", totalActions,
+    ", total instructions: ", totalOps
   echo "elapsed ", formatFloat(elapsed, ffDecimal, 2), "s, ",
     int(float(sim.tickCount) / max(elapsed, 0.001)), " ticks/s"
   if shotPath != "":
