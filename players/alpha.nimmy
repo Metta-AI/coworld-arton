@@ -90,7 +90,9 @@ proc neutralTargets() =
   for planet in planets():
     if planet.owner == 0:
       let d = nearestOwnDist(planet.x, planet.y)
-      let base = planet.ships + 4 + d div 8
+      # Heavy distance penalty: expanding next door beats shipping
+      # across the map.
+      let base = planet.ships + 4 + d div 2
       ids.add(planet.id)
       scores.add(base * planet.growth)
   var order = []
