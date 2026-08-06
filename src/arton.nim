@@ -114,12 +114,17 @@ proc demoOrders(sim: var Sim, playerId: int32) =
     sim.send(playerId, source, target)
 
 proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
-    showBox: bool): Image =
-  ## Draws the whole sim into a world sized image. Dev graphics only:
+    showBox: bool, pixelScale: float32 = 1.0): Image =
+  ## Draws the whole sim in world coordinates, scaled up to the real
+  ## output pixel size so nothing gets blurry. Dev graphics only:
   ## flat circles, triangle ships and plain text on white.
-  result = newImage(int(WorldWidth), int(WorldHeight))
+  result = newImage(
+    int(float32(WorldWidth) * pixelScale),
+    int(float32(WorldHeight) * pixelScale)
+  )
   result.fill(rgba(255, 255, 255, 255))
   let ctx = newContext(result)
+  ctx.scale(vec2(pixelScale, pixelScale))
   ctx.font = FontPath
 
   for planet in sim.planets:
@@ -239,14 +244,23 @@ makeContextCurrent(window)
 loadExtensions()
 let bxy = newBoxy()
 
+proc viewTransform(windowSize: IVec2): tuple[scale: float32, offset: Vec2] =
+  ## Uniform world to window scale and the letterbox offset that
+  ## keeps the world aspect ratio on any window size.
+  let
+    size = windowSize.vec2
+    scale = min(
+      size.x / float32(WorldWidth),
+      size.y / float32(WorldHeight)
+    )
+    drawSize = vec2(float32(WorldWidth), float32(WorldHeight)) * scale
+  return (scale, (size - drawSize) / 2)
+
 proc mouseWorld(): Vec2 =
-  ## Mouse position in world pixels regardless of dpi scale.
-  let scale = vec2(
-    float32(WorldWidth) / float32(window.size.x),
-    float32(WorldHeight) / float32(window.size.y)
-  )
-  return vec2(window.mousePos.vec2.x * scale.x,
-    window.mousePos.vec2.y * scale.y)
+  ## Mouse position in world pixels regardless of dpi scale or
+  ## letterboxing.
+  let view = viewTransform(window.size)
+  return (window.mousePos.vec2 - view.offset) / view.scale
 
 proc shiftDown(): bool =
   ## True while either shift key is held.
@@ -332,7 +346,8 @@ var
   lastTime = epochTime()
   accumulator = 0.0
 
-window.onFrame = proc() =
+proc stepSim() =
+  ## Advances the sim on a fixed timestep from real elapsed time.
   let now = epochTime()
   accumulator += min(now - lastTime, 0.25)
   lastTime = now
@@ -342,22 +357,43 @@ window.onFrame = proc() =
       for player in 2'i32 .. sim.config.playerCount:
         sim.demoOrders(player)
     sim.tick()
-
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
       keep.add(planetId)
   selected = keep
 
+proc drawWindow() =
+  ## Renders and presents one frame. The window size and dpi are
+  ## polled fresh at the top and everything in the frame, including
+  ## the viewport, derives from that one snapshot, so a frame can
+  ## never be drawn at a stale size or shape.
+  let windowSize = window.size
+  if windowSize.x <= 0 or windowSize.y <= 0:
+    return
+  makeContextCurrent(window)
   let
     showBox = dragging and
       (mouseWorld() - dragStart).length > DragThreshold
-    frame = sim.renderFrame(selected, boxRectNow(mouseWorld()), showBox)
+    view = viewTransform(windowSize)
+    frame = sim.renderFrame(
+      selected,
+      boxRectNow(mouseWorld()),
+      showBox,
+      view.scale
+    )
   bxy.addImage("frame", frame, mipmaps = false)
-  bxy.beginFrame(window.size)
-  bxy.drawImage("frame", rect(vec2(0, 0), window.size.vec2))
+  bxy.beginFrame(windowSize)
+  bxy.drawImage("frame", rect(
+    view.offset,
+    vec2(float32(frame.width), float32(frame.height))
+  ))
   bxy.endFrame()
   window.swapBuffers()
+
+window.onFrame = proc() =
+  stepSim()
+  drawWindow()
 
 while not window.closeRequested:
   pollEvents()
