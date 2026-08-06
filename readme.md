@@ -126,7 +126,7 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
   - Ships steer around planets, boids style, and navigate back on course after being pushed off it
   - Arrival: ship annihilates; +1 at a friendly planet, −1 at enemy/neutral, planet flips to the attacker when the count would drop below zero
 
-- [ ] Dev graphics
+- [x] Dev graphics
   - Open window with windy
   - use raw opengl context
   - Use silky for UI

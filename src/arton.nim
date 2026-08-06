@@ -187,6 +187,24 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     "screenshot (F2)"
   ctx.fillText(hud, vec2(10, 24))
 
+  if sim.outcome != MatchOngoing:
+    let banner =
+      if sim.outcome == MatchDraw:
+        "Draw"
+      else:
+        &"Player {sim.winner} wins!"
+    ctx.fontSize = 48
+    ctx.fillStyle =
+      if sim.outcome == MatchWon:
+        strokeColor(sim.winner)
+      else:
+        HudColor
+    let metrics = ctx.measureText(banner)
+    ctx.fillText(banner, vec2(
+      float32(WorldWidth) / 2 - metrics.width / 2,
+      float32(WorldHeight) / 2 - 24
+    ))
+
 proc takeScreenshot(frame: Image) =
   ## Saves the current frame as a png without any OS tools.
   createDir("screenshots")

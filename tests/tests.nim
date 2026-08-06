@@ -230,6 +230,100 @@ suite "ship movement":
             inc crowded
     check crowded == 0
 
+suite "win and draw":
+  test "capturing the last enemy planet wins":
+    var sim = makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 40),
+        makePlanet(1, 500, 360, PlanetSmall, 2, 5)
+      ],
+      @[
+        Player(id: 1, homePlanet: 0, offenseFactor: 100),
+        Player(id: 2, homePlanet: 1, offenseFactor: 100)
+      ]
+    )
+    sim.send(1, 0, 1)
+    for i in 0 ..< 3000:
+      sim.tick()
+    check sim.outcome == MatchWon
+    check sim.winner == 1
+
+  test "finished match freezes":
+    var sim = makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 40),
+        makePlanet(1, 500, 360, PlanetSmall, 2, 5)
+      ],
+      @[
+        Player(id: 1, homePlanet: 0, offenseFactor: 100),
+        Player(id: 2, homePlanet: 1, offenseFactor: 100)
+      ]
+    )
+    sim.send(1, 0, 1)
+    for i in 0 ..< 3000:
+      sim.tick()
+    let frozen = sim.stateHash()
+    sim.tick()
+    check sim.stateHash() == frozen
+
+  test "ships in flight keep a player alive":
+    var sim = makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 60),
+        makePlanet(1, 500, 360, PlanetSmall, 2, 20),
+        makePlanet(2, 1050, 650, PlanetSmall, NeutralOwner, 1)
+      ],
+      @[
+        Player(id: 1, homePlanet: 0, offenseFactor: 100),
+        Player(id: 2, homePlanet: 1, offenseFactor: 100)
+      ]
+    )
+    sim.send(2, 1, 2)
+    sim.send(1, 0, 1)
+    var sawLandlessAlive = false
+    for i in 0 ..< 3000:
+      sim.tick()
+      var ownsAny = false
+      for planet in sim.planets:
+        if planet.ownerId == 2:
+          ownsAny = true
+      if not ownsAny and sim.outcome == MatchOngoing:
+        sawLandlessAlive = true
+    check sawLandlessAlive
+    check sim.outcome == MatchOngoing
+    check sim.planets[2].ownerId == 2
+
+  test "draw when time runs out":
+    var sim = makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 40),
+        makePlanet(1, 500, 360, PlanetSmall, 2, 40)
+      ],
+      @[
+        Player(id: 1, homePlanet: 0, offenseFactor: 100),
+        Player(id: 2, homePlanet: 1, offenseFactor: 100)
+      ]
+    )
+    sim.config.maxTicks = 100
+    for i in 0 ..< 200:
+      sim.tick()
+    check sim.outcome == MatchDraw
+    check sim.tickCount == 100
+
+  test "single player wins by taking every planet":
+    var sim = makeSim(
+      @[
+        makePlanet(0, 200, 360, PlanetSmall, 1, 40),
+        makePlanet(1, 500, 360, PlanetSmall, NeutralOwner, 5)
+      ],
+      @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
+    )
+    sim.send(1, 0, 1)
+    for i in 0 ..< 3000:
+      sim.tick()
+    check sim.outcome == MatchWon
+    check sim.winner == 1
+
 suite "determinism":
   test "same seed stays identical over 600 ticks":
     var

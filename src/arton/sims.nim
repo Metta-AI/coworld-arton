@@ -43,6 +43,11 @@ type
     PlanetMedium
     PlanetLarge
 
+  MatchOutcome* = enum
+    MatchOngoing
+    MatchWon
+    MatchDraw
+
   Planet* = object
     id*: int32
     x*: int32
@@ -90,6 +95,8 @@ type
     players*: seq[Player]
     ships*: seq[Ship]
     waves*: seq[Wave]
+    outcome*: MatchOutcome
+    winner*: int32
 
 proc initRng*(seed: uint32): Rng =
   ## Creates a generator from a seed. Zero is remapped as xorshift32
@@ -425,8 +432,58 @@ proc producePlanets(sim: var Sim) =
       planet.growthTicks = 0
       inc planet.ships
 
+proc alive(sim: Sim, playerId: int32): bool =
+  ## A player is alive while they own a planet, have ships in
+  ## flight or still have a wave spawning.
+  for planet in sim.planets:
+    if planet.ownerId == playerId:
+      return true
+  for ship in sim.ships:
+    if ship.ownerId == playerId:
+      return true
+  for wave in sim.waves:
+    if wave.ownerId == playerId:
+      return true
+  return false
+
+proc checkOutcome(sim: var Sim) =
+  ## Decides the match. Single player wins by taking every planet,
+  ## multiplayer by being the only player left alive. When time runs
+  ## out first the match is a draw.
+  if sim.players.len == 1:
+    let playerId = sim.players[0].id
+    var ownsAll = true
+    for planet in sim.planets:
+      if planet.ownerId != playerId:
+        ownsAll = false
+        break
+    if ownsAll:
+      sim.outcome = MatchWon
+      sim.winner = playerId
+      return
+  elif sim.players.len > 1:
+    var
+      aliveCount = 0
+      lastAlive = NeutralOwner
+    for player in sim.players:
+      if sim.alive(player.id):
+        inc aliveCount
+        lastAlive = player.id
+    if aliveCount == 1:
+      sim.outcome = MatchWon
+      sim.winner = lastAlive
+      return
+    if aliveCount == 0:
+      sim.outcome = MatchDraw
+      return
+  if sim.tickCount >= sim.config.maxTicks:
+    sim.outcome = MatchDraw
+
 proc tick*(sim: var Sim) =
   ## Advances the simulation by one tick with a fixed phase order.
+  ## Does nothing once the match is decided.
+  if sim.outcome != MatchOngoing:
+    return
   inc sim.tickCount
   sim.spawnWaves()
   sim.steerShips()
@@ -434,6 +491,7 @@ proc tick*(sim: var Sim) =
   sim.avoidPlanets()
   sim.landShips()
   sim.producePlanets()
+  sim.checkOutcome()
 
 proc mix(hash: var uint32, value: int32) =
   ## Folds one value into an FNV-1a style hash.
@@ -449,6 +507,8 @@ proc stateHash*(sim: Sim): uint32 =
   var hash = 2166136261'u32
   hash.mix(sim.tickCount)
   hash.mix(cast[int32](sim.rng.state))
+  hash.mix(int32(ord(sim.outcome)))
+  hash.mix(sim.winner)
   for planet in sim.planets:
     hash.mix(planet.id)
     hash.mix(planet.x)
