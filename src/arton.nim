@@ -35,10 +35,21 @@ var
 
 proc aiPaths(): seq[string] =
   ## Script paths from repeated --ai=path arguments. Every flag adds
-  ## one AI player to the game.
+  ## one AI player, and a :count suffix adds that many copies, so
+  ## --ai=players/alpha.nimmy:5 is five of the same player.
   for param in commandLineParams():
     if param.startsWith("--ai="):
-      result.add(param.split("=")[1])
+      var
+        path = param[5 .. ^1]
+        count = 1
+      let colon = path.rfind(':')
+      if colon != -1:
+        let tail = path[colon + 1 .. ^1]
+        if tail.len > 0 and allCharsInSet(tail, Digits):
+          count = parseInt(tail)
+          path = path[0 ..< colon]
+      for i in 0 ..< count:
+        result.add(path)
 
 proc aiPlayerCount(): int32 =
   ## Players in the game: every --ai flag adds an AI player and every

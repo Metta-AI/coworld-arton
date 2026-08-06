@@ -64,7 +64,8 @@ A player wins by taking every planet in single player, or every non-neutral plan
 AI scripts are written in nimmy. Each script is a single .nimmy file in the players/ folder and drives one player. A script defines a tick() proc that is called on a fixed cadence, every 15 simulation ticks. Every --ai flag adds one AI player: one AI plays against the human, two AIs play each other, more AIs make a bigger game.
 
     nim r src/arton.nim --ai=players/grabber.nimmy
-    nim r src/arton.nim --ai=players/grabber.nimmy --ai=players/grabber.nimmy
+    nim r src/arton.nim --ai=players/alpha.nimmy --ai=players/grabber.nimmy
+    nim r src/arton.nim --ai=players/alpha.nimmy:5
 
 Adding --player reserves a human slot on top of the AI players, so --player with two --ai flags is a three player game where the human is player 1 and the AIs are players 2 and 3.
 
