@@ -61,9 +61,10 @@ A player wins by taking every planet in single player, or every non-neutral plan
 
 ## AI interface
 
-AI scripts are written in nimmy. Each script is a single .nimmy file in the players/ folder and drives one player. A script defines a tick() proc that is called on a fixed cadence, every 15 simulation ticks. Run a match against one with:
+AI scripts are written in nimmy. Each script is a single .nimmy file in the players/ folder and drives one player. A script defines a tick() proc that is called on a fixed cadence, every 15 simulation ticks. Every --ai flag adds one AI player: one AI plays against the human, two AIs play each other, more AIs make a bigger game.
 
-    nim r src/arton.nim --ai2=players/grabber.nimmy
+    nim r src/arton.nim --ai=players/grabber.nimmy
+    nim r src/arton.nim --ai=players/grabber.nimmy --ai=players/grabber.nimmy
 
 Scripts have full information: they can read the state of every planet (including ownership and ship count) and see every ship in transit. The only hidden state is the other players' offense factors.
 

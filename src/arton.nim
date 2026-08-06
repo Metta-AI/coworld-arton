@@ -42,20 +42,32 @@ var
   demoEnabled = false
   shotIndex = 0
 
-proc loadAgents(): seq[Agent] =
-  ## Loads nimmy AI scripts from --ai<player>=path arguments, for
-  ## example --ai2=players/grabber.nimmy.
+proc aiPaths(): seq[string] =
+  ## Script paths from repeated --ai=path arguments. Every flag adds
+  ## one AI player to the game.
   for param in commandLineParams():
-    if param.startsWith("--ai") and "=" in param:
-      let
-        parts = param.split("=")
-        playerId = int32(parseInt(parts[0][4 .. ^1]))
-        agent = newAgent(playerId, readFile(parts[1]))
-      if agent.failed:
-        echo "AI for player ", playerId, " failed to load: ", agent.error
-      else:
-        echo "AI for player ", playerId, ": ", parts[1]
-      result.add(agent)
+    if param.startsWith("--ai="):
+      result.add(param.split("=")[1])
+
+proc aiPlayerCount(): int32 =
+  ## Players in the game: at least two, more when more AI scripts
+  ## are passed.
+  return max(DefaultPlayerCount, int32(aiPaths().len))
+
+proc loadAgents(playerCount: int32): seq[Agent] =
+  ## Loads the AI scripts into the last player slots: a single AI
+  ## plays the human as player 2, two AIs play each other as players
+  ## 1 and 2, and so on.
+  let paths = aiPaths()
+  for i, path in paths:
+    let
+      playerId = playerCount - int32(paths.len) + int32(i) + 1
+      agent = newAgent(playerId, readFile(path))
+    if agent.failed:
+      echo "AI for player ", playerId, " failed to load: ", agent.error
+    else:
+      echo "AI for player ", playerId, ": ", path
+    result.add(agent)
 
 proc stepAgents(sim: var Sim) =
   ## Runs every AI script on its fixed cadence.
@@ -298,8 +310,11 @@ proc headlessShot() =
       seed = uint32(parseInt(param.split("=")[1]))
     elif param == "--demo":
       demo = true
-  sim = newSim(initSimConfig(seed = seed))
-  aiAgents = loadAgents()
+  sim = newSim(initSimConfig(
+    seed = seed,
+    playerCount = aiPlayerCount()
+  ))
+  aiAgents = loadAgents(sim.config.playerCount)
   for i in 0 ..< ticks:
     if demo:
       for player in 1'i32 .. sim.config.playerCount:
@@ -327,8 +342,8 @@ for param in commandLineParams():
   if param.startsWith("--shot="):
     headlessShot()
 
-sim = newSim(initSimConfig(seed = 1))
-aiAgents = loadAgents()
+sim = newSim(initSimConfig(seed = 1, playerCount = aiPlayerCount()))
+aiAgents = loadAgents(sim.config.playerCount)
 
 let window = newWindow(
   "Arton",
