@@ -45,9 +45,6 @@ const
   ## How many heading steps a ship can rotate per tick. A full half
   ## turn takes about one second.
   TurnRateSteps* = 2'i32
-  ## Boids style alignment: colliding ships average their headings a
-  ## little. An eighth of the difference, capped at this many steps.
-  AlignMaxSteps* = 4'i32
   SinTable* = block:
     var table: array[256, int32]
     for i in 0 ..< 256:
@@ -91,6 +88,9 @@ type
     prevX*: int32
     prevY*: int32
     heading*: int32
+    ## Ticks spent flying. Older ships have priority: they push
+    ## younger ships out of the way and hold their own course.
+    age*: int32
 
   Wave* = object
     ## A send order that is still launching rings at its source rim.
@@ -388,6 +388,7 @@ proc steerShips(sim: var Sim) =
       dxPixels = target.x - ship.x div SubpixelScale
       dyPixels = target.y - ship.y div SubpixelScale
     ship.heading = turnToward(ship.heading, dxPixels, dyPixels)
+    inc ship.age
     ship.prevX = ship.x
     ship.prevY = ship.y
     ship.x += cos256(ship.heading) * ShipSpeedSubpixels div TrigScale
@@ -417,20 +418,21 @@ proc pushPair(sim: var Sim, i, j: int32) =
     let overlap = minDist - dist
     pushX = dx * (overlap div 2) div dist
     pushY = dy * (overlap div 2) div dist
-  sim.ships[i].x -= pushX
-  sim.ships[i].y -= pushY
-  sim.ships[j].x += pushX
-  sim.ships[j].y += pushY
-  # A little boids alignment: colliding ships average their headings
-  # slightly. Head-on streams shear apart, some up and some down,
-  # instead of grinding straight through each other.
-  let
-    diff = ((sim.ships[j].heading - sim.ships[i].heading + 128) and
-      255) - 128
-    nudge = clamp(diff div 8, -AlignMaxSteps, AlignMaxSteps)
-  if nudge != 0:
-    sim.ships[i].heading = (sim.ships[i].heading + nudge) and 255
-    sim.ships[j].heading = (sim.ships[j].heading - nudge) and 255
+  # Priority queuing: the ship that has been flying longer holds its
+  # course and the younger ship takes the whole push. Equal ages,
+  # like ships from the same ring, split the push evenly. This keeps
+  # crowds flowing instead of forming deadlocked shells.
+  if sim.ships[i].age > sim.ships[j].age:
+    sim.ships[j].x += pushX * 2
+    sim.ships[j].y += pushY * 2
+  elif sim.ships[j].age > sim.ships[i].age:
+    sim.ships[i].x -= pushX * 2
+    sim.ships[i].y -= pushY * 2
+  else:
+    sim.ships[i].x -= pushX
+    sim.ships[i].y -= pushY
+    sim.ships[j].x += pushX
+    sim.ships[j].y += pushY
 
 proc shipCell(ship: Ship): int32 =
   ## Grid cell index for a ship, clamped to the grid edges.
@@ -677,6 +679,7 @@ proc stateHash*(sim: Sim): uint32 =
     hash.mix(ship.prevX)
     hash.mix(ship.prevY)
     hash.mix(ship.heading)
+    hash.mix(ship.age)
   for wave in sim.waves:
     hash.mix(wave.ownerId)
     hash.mix(wave.sourcePlanet)
