@@ -36,6 +36,10 @@ const
   ## against a snapshot and apply capped, so crowded lanes cannot
   ## relay a ship across the map in one tick.
   PushMaxSubpixels* = 512'i32
+  ## A spawn slot is blocked when another own ship is within this
+  ## box. Smaller than the interaction diameter, so some overlap and
+  ## pushing at the rim is fine, it just prevents overcrowding.
+  SpawnBlockSubpixels* = 12'i32 * SubpixelScale
   ## Ship collision broadphase grid. Cells are bigger than the ship
   ## interaction diameter so only neighbor cells need checking.
   CollisionCellPixels* = 32'i32
@@ -353,15 +357,17 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
       spawnY = source.y * SubpixelScale + spawnDir.y * spawnDistPixels
       velX = spawnDir.x * ShipSpeedSubpixels div SubpixelScale
       velY = spawnDir.y * ShipSpeedSubpixels div SubpixelScale
-    # A slot only spawns when it is actually free. Ships already out
+    # A slot only spawns when it is mostly free. Ships already out
     # there, like an earlier wave passing the rim, block the slot and
-    # those ships stay on the planet for a later ring.
+    # those ships stay on the planet for a later ring. The check is
+    # looser than the interaction diameter, so a little overlap and
+    # pushing at spawn is fine, it just prevents overcrowding.
     var blocked = false
     for ship in sim.ships:
       if ship.ownerId != wave.ownerId:
         continue
-      if abs(ship.x - spawnX) >= ShipRadiusSubpixels * 2 or
-        abs(ship.y - spawnY) >= ShipRadiusSubpixels * 2:
+      if abs(ship.x - spawnX) >= SpawnBlockSubpixels or
+        abs(ship.y - spawnY) >= SpawnBlockSubpixels:
           continue
       blocked = true
       break
