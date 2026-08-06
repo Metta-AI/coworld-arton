@@ -20,3 +20,4 @@ nimcache
 # Project specific ignores.
 screenshots/
 dist/
+tmp/

@@ -140,12 +140,12 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
   - Ships as simple dots or triangles
   - White background, no shaders
 
-- [ ] Human controls
+- [x] Human controls
   - Single click, shift click, box select, shift box select, double click (select all own planets)
   - Click a non-selected planet to send ships
   - Offense factor set with keys 1–0 (10%–100%)
 
-- [ ] Win and draw detection
+- [x] Win and draw detection
   - Single player: capture all planets
   - Multiplayer: capture all non-neutral planets
   - Draw when time runs out

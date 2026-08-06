@@ -283,6 +283,18 @@ proc headlessShot() =
   echo "Saved ", shotPath, " at tick ", sim.tickCount
   quit(0)
 
+proc determinismHash(): uint32 =
+  ## Hash of a fixed scripted match. Printed on every start so the
+  ## native and WASM builds can be compared for bit identical sims.
+  var sim = newSim(initSimConfig(seed = 1))
+  for i in 0 ..< 600:
+    for player in 1'i32 .. sim.config.playerCount:
+      sim.demoOrders(player)
+    sim.tick()
+  return sim.stateHash()
+
+echo "determinism hash ", determinismHash()
+
 for param in commandLineParams():
   if param.startsWith("--shot="):
     headlessShot()
