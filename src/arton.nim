@@ -154,13 +154,14 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     ctx.save()
     ctx.translate(vec2(x, y))
     ctx.rotate(angle)
-    ctx.fillStyle = strokeColor(ship.ownerId)
+    ctx.strokeStyle = strokeColor(ship.ownerId)
+    ctx.lineWidth = 2
+    # An open V pointing at the target, wings swept back.
     let path = newPath()
-    path.moveTo(4, 0)
-    path.lineTo(-3, -2.5)
-    path.lineTo(-3, 2.5)
-    path.closePath()
-    ctx.fill(path)
+    path.moveTo(-6, -5)
+    path.lineTo(8, 0)
+    path.lineTo(-6, 5)
+    ctx.stroke(path)
     ctx.restore()
 
   ctx.fillStyle = HudColor
