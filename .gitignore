@@ -16,3 +16,7 @@ nimcache
 *.pdb
 *.ilk
 *.out
+
+# Project specific ignores.
+screenshots/
+dist/

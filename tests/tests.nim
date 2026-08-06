@@ -1,4 +1,4 @@
-import std/unittest, arton
+import std/unittest, arton/sims
 
 proc makePlanet(id, x, y: int32, size: PlanetSize,
     ownerId, ships: int32): Planet =

@@ -119,7 +119,7 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
   - Map generation: planets of varying sizes, all neutral with random ship counts, some assigned to players
   - Player planets produce ships over time at a rate based on planet size
 
-- [ ] Ship movement
+- [x] Ship movement
   - Rim departure: ships spawn in an arc around the planet facing their target, new spawns push earlier ships outward
   - Uniform ship speed; no mid-flight redirection
   - Same-player ships push each other apart (sphere verlet style); enemy ships pass through
