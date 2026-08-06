@@ -188,6 +188,10 @@ suite "ship movement":
     for i in 0 ..< 3000:
       sim.tick()
       for ship in sim.ships:
+        # A ship that got wedged is allowed to phase through, so the
+        # keep out rule only applies to ships that are not phasing.
+        if ship.stuckTicks < 0:
+          continue
         let
           dx = ship.x div SubpixelScale - sim.planets[1].x
           dy = ship.y div SubpixelScale - sim.planets[1].y

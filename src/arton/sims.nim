@@ -54,6 +54,12 @@ const
   ## that the turning circle stays smaller than the tightest landing
   ## ring, so ships can never orbit a planet they want to land on.
   TurnRateSteps* = 3'i32
+  ## Stuck failsafe: a ship that barely moves for this many ticks
+  ## phases out, ignoring all collision rules for a while, long
+  ## enough to fly clear through anything it was wedged against.
+  StuckLimitTicks* = 10'i32
+  PhaseTicks* = 60'i32
+  StuckSpeedSubpixels* = ShipSpeedSubpixels div 2
   SinTable* = block:
     var table: array[256, int32]
     for i in 0 ..< 256:
@@ -100,6 +106,9 @@ type
     ## Ticks spent flying. Older ships have priority: they push
     ## younger ships out of the way and hold their own course.
     age*: int32
+    ## Ticks without real movement. Negative while the ship phases
+    ## through everything to break out of a wedge.
+    stuckTicks*: int32
 
   Wave* = object
     ## A send order that is still launching rings at its source rim.
@@ -408,6 +417,21 @@ proc steerShips(sim: var Sim) =
   ## the heading slowly rotates toward the target. Ships always move
   ## in their direction of travel, so they can never stall.
   for ship in sim.ships.mitems:
+    # Stuck failsafe bookkeeping. Displacement over the whole last
+    # tick, pushes and planet contact included. Barely moving for
+    # too long flips the ship into phasing for a fixed window.
+    let
+      dispX = ship.x - ship.prevX
+      dispY = ship.y - ship.prevY
+      moved = dispX * dispX + dispY * dispY
+    if ship.stuckTicks < 0:
+      inc ship.stuckTicks
+    elif moved < StuckSpeedSubpixels * StuckSpeedSubpixels:
+      inc ship.stuckTicks
+      if ship.stuckTicks > StuckLimitTicks:
+        ship.stuckTicks = -PhaseTicks
+    else:
+      ship.stuckTicks = 0
     let
       target = sim.planets[ship.targetPlanet]
       dxPixels = target.x - ship.x div SubpixelScale
@@ -424,6 +448,9 @@ proc pushPair(sim: Sim, i, j: int32,
   ## Accumulates the separation push for one overlapping same player
   ## pair. Ships of different players pass through each other.
   if sim.ships[i].ownerId != sim.ships[j].ownerId:
+    return
+  # Phasing ships ignore all ship collision rules.
+  if sim.ships[i].stuckTicks < 0 or sim.ships[j].stuckTicks < 0:
     return
   let
     dx = sim.ships[j].x - sim.ships[i].x
@@ -542,6 +569,9 @@ proc avoidPlanets(sim: var Sim) =
   ## Keeps ships outside planets they are not landing on, so swarms
   ## flow around obstacles instead of tunneling through them.
   for ship in sim.ships.mitems:
+    # Phasing ships fly straight through planets toward their target.
+    if ship.stuckTicks < 0:
+      continue
     for planet in sim.planets:
       if planet.id == ship.targetPlanet:
         continue
@@ -726,6 +756,7 @@ proc stateHash*(sim: Sim): uint32 =
     hash.mix(ship.prevY)
     hash.mix(ship.heading)
     hash.mix(ship.age)
+    hash.mix(ship.stuckTicks)
   for wave in sim.waves:
     hash.mix(wave.ownerId)
     hash.mix(wave.sourcePlanet)
