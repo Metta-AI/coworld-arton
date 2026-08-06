@@ -26,7 +26,7 @@ const
   ## Ship positions use fixed point subpixels so movement stays
   ## integer only while still being smooth.
   SubpixelScale* = 256'i32
-  ShipSpeedSubpixels* = 255'i32
+  ShipSpeedSubpixels* = 319'i32
   ShipRadiusPixels* = 9'i32
   ShipRadiusSubpixels* = ShipRadiusPixels * SubpixelScale
   ShipSpawnGapPixels* = 19'i32
@@ -50,9 +50,10 @@ const
   ## TrigScale. Baked at compile time so runtime stays float free.
   HeadingCount* = 256'i32
   TrigScale* = 4096'i32
-  ## How many heading steps a ship can rotate per tick. A full half
-  ## turn takes about one second.
-  TurnRateSteps* = 2'i32
+  ## How many heading steps a ship can rotate per tick. Fast enough
+  ## that the turning circle stays smaller than the tightest landing
+  ## ring, so ships can never orbit a planet they want to land on.
+  TurnRateSteps* = 3'i32
   SinTable* = block:
     var table: array[256, int32]
     for i in 0 ..< 256:
