@@ -158,11 +158,20 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     for planetId in dragSources:
       if planetId == dragTarget:
         continue
+      let
+        planet = sim.planets[planetId]
+        center = vec2(float32(planet.x), float32(planet.y))
+        gap = (targetCenter - center).length
+        sourceEdge = float32(planet.radius) + 5
+        targetEdge = float32(target.radius) + 5
+      # Ring to ring, not center to center. Skip if they overlap.
+      if gap <= sourceEdge + targetEdge:
+        continue
       anyLine = true
-      let planet = sim.planets[planetId]
+      let dir = (targetCenter - center) / gap
       ctx.strokeSegment(segment(
-        vec2(float32(planet.x), float32(planet.y)),
-        targetCenter
+        center + dir * sourceEdge,
+        targetCenter - dir * targetEdge
       ))
     if anyLine:
       ctx.lineWidth = 3
@@ -197,9 +206,10 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     let
       label = $planet.ships
       metrics = ctx.measureText(label)
+    # Centered on the planet, baseline nudged for optical center.
     ctx.fillText(label, vec2(
       float32(planet.x) - metrics.width / 2,
-      float32(planet.y) - float32(planet.radius) - 18
+      float32(planet.y) + 5
     ))
 
   if showBox:
