@@ -184,9 +184,7 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     let
       x = float32(ship.x) / float32(SubpixelScale)
       y = float32(ship.y) / float32(SubpixelScale)
-      velX = float32(ship.x - ship.prevX)
-      velY = float32(ship.y - ship.prevY)
-      angle = arctan2(velY, velX)
+      angle = float32(ship.heading) * 2.0'f * PI / 256.0'f
     ctx.save()
     ctx.translate(vec2(x, y))
     ctx.rotate(angle)

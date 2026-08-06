@@ -126,8 +126,9 @@ suite "ship movement":
       sim.tick()
     check sim.waves.len == 0
     check sim.ships.len == 0
-    check sim.planets[0].ships == 40 - 40 + 33
-    check sim.planets[1].ships == 10 + 40 + 33
+    let produced = 3000'i32 div GrowthIntervals[ord(PlanetSmall)]
+    check sim.planets[0].ships == 40 - 40 + produced
+    check sim.planets[1].ships == 10 + 40 + produced
 
   test "offense factor scales the wave":
     var sim = makeSim(

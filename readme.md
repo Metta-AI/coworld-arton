@@ -44,10 +44,10 @@ Ship behavior:
   * A ring holds as many ships as fit around the planet's circumference, so bigger planets launch ships faster.
   * When fewer ships remain than fill a ring, they leave as an arc centered on the direction they are going.
   * Rings launch every third of a second until the wave is done.
+- Ships always move forward along their heading at the uniform ship speed, and the heading slowly rotates toward the target. Rings launch heading away from the planet, so ships from the back side arc around and line up on the target over time.
 - Ships in transit push each other apart, sphere verlet simulation style — but only ships of the same player interact. Enemy ships pass through each other (enemy ships don't interact under normal rules).
-- Ships also collide with planets and steer around them, boids style.
+- Ships collide with planets. A ship pressed against a planet turns along the tangent that leads toward its target, so it slides around and never gets stuck.
 - Ships can't be redirected mid-flight: once they leave their planet they fly to their destination and that's it. Pushes can knock them well off course though, so they navigate back toward their target.
-- Ship speed is uniform for all ships.
 
 When ships arrive at their target planet, the ship is annihilated and:
 

@@ -22,11 +22,11 @@ const
   ## Planet radius in pixels and ship production interval in ticks,
   ## both indexed by PlanetSize. Bigger planets produce faster.
   PlanetRadii* = [16'i32, 24'i32, 32'i32]
-  GrowthIntervals* = [90'i32, 60'i32, 36'i32]
+  GrowthIntervals* = [112'i32, 75'i32, 45'i32]
   ## Ship positions use fixed point subpixels so movement stays
   ## integer only while still being smooth.
   SubpixelScale* = 256'i32
-  ShipSpeedSubpixels* = 204'i32
+  ShipSpeedSubpixels* = 255'i32
   ShipRadiusPixels* = 9'i32
   ShipRadiusSubpixels* = ShipRadiusPixels * SubpixelScale
   ShipSpawnGapPixels* = 19'i32
@@ -42,6 +42,9 @@ const
   ## TrigScale. Baked at compile time so runtime stays float free.
   HeadingCount* = 256'i32
   TrigScale* = 4096'i32
+  ## How many heading steps a ship can rotate per tick. A full half
+  ## turn takes about one second.
+  TurnRateSteps* = 2'i32
   SinTable* = block:
     var table: array[256, int32]
     for i in 0 ..< 256:
@@ -77,12 +80,14 @@ type
   Ship* = object
     ownerId*: int32
     targetPlanet*: int32
-    ## Position and previous position in subpixels. Velocity is the
-    ## difference between them, verlet style.
+    ## Position and previous position in subpixels. Ships always fly
+    ## forward along their heading and slowly turn toward the target,
+    ## so they can be pushed around but never stall.
     x*: int32
     y*: int32
     prevX*: int32
     prevY*: int32
+    heading*: int32
 
   Wave* = object
     ## A send order that is still launching rings at its source rim.
@@ -273,6 +278,35 @@ proc rotate(x, y, heading: int32): tuple[x, y: int32] =
     (x * s + y * c) div TrigScale
   )
 
+proc headingOf*(dx, dy: int32): int32 =
+  ## Heading closest to the direction of a vector. Inputs must be
+  ## pixel scale to stay clear of overflow. Rarely called, so the
+  ## linear scan over all 256 headings is fine.
+  var best = low(int32)
+  for heading in 0'i32 ..< HeadingCount:
+    let dot = cos256(heading) * dx + sin256(heading) * dy
+    if dot > best:
+      best = dot
+      result = heading
+
+proc turnToward(heading, dx, dy: int32): int32 =
+  ## One tick of turning: rotates the heading up to TurnRateSteps
+  ## toward the direction of (dx, dy). Inputs stay small enough that
+  ## the cross and dot products fit 32 bits.
+  let
+    headingX = cos256(heading)
+    headingY = sin256(heading)
+    cross = headingX * dy - headingY * dx
+    dot = headingX * dx + headingY * dy
+  if cross > 0:
+    return (heading + TurnRateSteps) and 255
+  if cross < 0:
+    return (heading - TurnRateSteps) and 255
+  if dot >= 0:
+    return heading
+  # Dead behind: pick a fixed side so the choice is deterministic.
+  return (heading + TurnRateSteps) and 255
+
 proc spawnRing(sim: var Sim, wave: var Wave) =
   ## Launches one ring of ships around the source rim. A full ring
   ## holds as many ships as fit around the circumference, so bigger
@@ -289,6 +323,7 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
   let
     dirX = dxPixels * SubpixelScale div distPixels
     dirY = dyPixels * SubpixelScale div distPixels
+    baseHeading = headingOf(dxPixels, dyPixels)
     spawnDistPixels = source.radius + ShipRadiusPixels + 2
     circumference = 628 * spawnDistPixels div 100
     capacity = max(circumference div ShipSpawnGapPixels, 1)
@@ -297,14 +332,16 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
   for i in 0 ..< count:
     # Slots alternate around the facing direction, so a partial ring
     # is an arc centered on it and a full ring closes the circle.
+    # Every ship starts moving straight away from the planet and
+    # turns toward the target over time.
     let
       side = (i + 1) div 2
-      heading =
+      offset =
         if i mod 2 == 1:
           int32(side) * step
         else:
           -int32(side) * step
-      spawnDir = rotate(dirX, dirY, heading)
+      spawnDir = rotate(dirX, dirY, offset)
       spawnX = source.x * SubpixelScale + spawnDir.x * spawnDistPixels
       spawnY = source.y * SubpixelScale + spawnDir.y * spawnDistPixels
       velX = spawnDir.x * ShipSpeedSubpixels div SubpixelScale
@@ -315,7 +352,8 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
       x: spawnX,
       y: spawnY,
       prevX: spawnX - velX,
-      prevY: spawnY - velY
+      prevY: spawnY - velY,
+      heading: (baseHeading + offset) and 255
     ))
     dec wave.shipsLeft
     dec sim.planets[wave.sourcePlanet].ships
@@ -338,35 +376,19 @@ proc spawnWaves(sim: var Sim) =
   sim.waves = kept
 
 proc steerShips(sim: var Sim) =
-  ## Verlet moves every ship, steering it back toward its target so
-  ## pushes can knock it off course but never off mission.
+  ## Moves every ship forward along its heading at full speed while
+  ## the heading slowly rotates toward the target. Ships always move
+  ## in their direction of travel, so they can never stall.
   for ship in sim.ships.mitems:
     let
       target = sim.planets[ship.targetPlanet]
-      dx = target.x * SubpixelScale - ship.x
-      dy = target.y * SubpixelScale - ship.y
-      dxPixels = dx div SubpixelScale
-      dyPixels = dy div SubpixelScale
-      distPixels = isqrt(dxPixels * dxPixels + dyPixels * dyPixels)
-    var
-      velX = ship.x - ship.prevX
-      velY = ship.y - ship.prevY
-    if distPixels > 0:
-      let
-        desiredX = dx * ShipSpeedSubpixels div
-          (distPixels * SubpixelScale)
-        desiredY = dy * ShipSpeedSubpixels div
-          (distPixels * SubpixelScale)
-      velX = (velX * 3 + desiredX) div 4
-      velY = (velY * 3 + desiredY) div 4
-    let speed = isqrt(velX * velX + velY * velY)
-    if speed > ShipSpeedSubpixels:
-      velX = velX * ShipSpeedSubpixels div speed
-      velY = velY * ShipSpeedSubpixels div speed
+      dxPixels = target.x - ship.x div SubpixelScale
+      dyPixels = target.y - ship.y div SubpixelScale
+    ship.heading = turnToward(ship.heading, dxPixels, dyPixels)
     ship.prevX = ship.x
     ship.prevY = ship.y
-    ship.x += velX
-    ship.y += velY
+    ship.x += cos256(ship.heading) * ShipSpeedSubpixels div TrigScale
+    ship.y += sin256(ship.heading) * ShipSpeedSubpixels div TrigScale
 
 proc pushPair(sim: var Sim, i, j: int32) =
   ## Resolves one potential same player ship overlap, verlet style.
@@ -486,6 +508,24 @@ proc avoidPlanets(sim: var Sim) =
         continue
       ship.x = centerX + dx * minDist div dist
       ship.y = centerY + dy * minDist div dist
+      # Contact. If the heading still points into the planet, turn
+      # along the tangent that leads toward the target, so ships
+      # slide around planets instead of getting stuck.
+      let
+        radialX = dx div SubpixelScale
+        radialY = dy div SubpixelScale
+        inward = cos256(ship.heading) * radialX +
+          sin256(ship.heading) * radialY < 0
+      if inward:
+        let
+          targetPlanet = sim.planets[ship.targetPlanet]
+          toTargetX = targetPlanet.x - ship.x div SubpixelScale
+          toTargetY = targetPlanet.y - ship.y div SubpixelScale
+          alongLeft = -radialY * toTargetX + radialX * toTargetY
+        if alongLeft >= 0:
+          ship.heading = turnToward(ship.heading, -radialY, radialX)
+        else:
+          ship.heading = turnToward(ship.heading, radialY, -radialX)
 
 proc landShips(sim: var Sim) =
   ## Annihilates ships that reached their target planet. Friendly
@@ -623,6 +663,7 @@ proc stateHash*(sim: Sim): uint32 =
     hash.mix(ship.y)
     hash.mix(ship.prevX)
     hash.mix(ship.prevY)
+    hash.mix(ship.heading)
   for wave in sim.waves:
     hash.mix(wave.ownerId)
     hash.mix(wave.sourcePlanet)
