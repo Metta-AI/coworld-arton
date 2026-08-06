@@ -66,6 +66,8 @@ AI scripts are written in nimmy. Each script is a single .nimmy file in the play
     nim r src/arton.nim --ai=players/grabber.nimmy
     nim r src/arton.nim --ai=players/grabber.nimmy --ai=players/grabber.nimmy
 
+Adding --player reserves a human slot on top of the AI players, so --player with two --ai flags is a three player game where the human is player 1 and the AIs are players 2 and 3.
+
 Scripts have full information: they can read the state of every planet (including ownership and ship count) and see every ship in transit. The only hidden state is the other players' offense factors.
 
 - Read: planets(), ships(), myId(), myOffense(), gameTick(), mapWidth(), mapHeight(), selection()

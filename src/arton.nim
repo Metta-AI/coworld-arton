@@ -50,9 +50,14 @@ proc aiPaths(): seq[string] =
       result.add(param.split("=")[1])
 
 proc aiPlayerCount(): int32 =
-  ## Players in the game: at least two, more when more AI scripts
-  ## are passed.
-  return max(DefaultPlayerCount, int32(aiPaths().len))
+  ## Players in the game: every --ai flag adds an AI player and every
+  ## --player flag adds a human slot, at least two players total.
+  ## Human slots come first, so the human is always player 1.
+  var humans = 0
+  for param in commandLineParams():
+    if param == "--player":
+      inc humans
+  return max(DefaultPlayerCount, int32(aiPaths().len + humans))
 
 proc loadAgents(playerCount: int32): seq[Agent] =
   ## Loads the AI scripts into the last player slots: a single AI
