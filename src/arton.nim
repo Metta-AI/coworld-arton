@@ -87,16 +87,22 @@ proc playerHue(ownerId: int32): float32 =
 
 proc fillColor(ownerId: int32): ColorRGBA =
   ## Planet fill color for an owner: a light pastel of their hue.
+  ## Every other player slot is a bit deeper, so players whose hues
+  ## ended up close still read as different colors.
   if ownerId == NeutralOwner:
     return NeutralFill
-  return hsv(playerHue(ownerId), 35, 96).color.rgba
+  if ownerId mod 2 == 1:
+    return hsv(playerHue(ownerId), 35, 97).color.rgba
+  return hsv(playerHue(ownerId), 52, 88).color.rgba
 
 proc strokeColor(ownerId: int32): ColorRGBA =
-  ## Planet outline and ship color for an owner: a strong dark
-  ## version of their hue.
+  ## Planet outline and ship color for an owner: a strong version of
+  ## their hue, alternating bright and dark between player slots.
   if ownerId == NeutralOwner:
     return NeutralStroke
-  return hsv(playerHue(ownerId), 85, 70).color.rgba
+  if ownerId mod 2 == 1:
+    return hsv(playerHue(ownerId), 82, 76).color.rgba
+  return hsv(playerHue(ownerId), 95, 52).color.rgba
 
 proc offenseFactor(sim: Sim, playerId: int32): int32 =
   ## Reads a player's offense factor.

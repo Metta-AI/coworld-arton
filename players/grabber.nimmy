@@ -2,7 +2,7 @@
 # nearest planet it does not own.
 
 proc tick() =
-  if gameTick() % 240 != 0:
+  if gameTick() % 60 != 0:
     return
 
   var best = -1

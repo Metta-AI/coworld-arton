@@ -1,0 +1,152 @@
+# Alpha. Expands to the most cost effective neutral planets first and
+# only commits to attacks its strike group can actually win.
+#
+# Target score, lower is better:
+#   (garrison + margin + dist / 8) * growth
+# Cheap, close and fast growing planets come first. A strike group is
+# up to three of our planets closest to the target, sent only when
+# their combined ships beat the expected defense at arrival.
+
+proc dist(x1, y1, x2, y2) =
+  let dx = x1 - x2
+  let dy = y1 - y2
+  return isqrt(dx * dx + dy * dy)
+
+proc findPlanet(id) =
+  for planet in planets():
+    if planet.id == id:
+      return planet
+
+proc nearestOwnDist(x, y) =
+  var best = 999999
+  for planet in planets():
+    if planet.owner == myId():
+      let d = dist(planet.x, planet.y, x, y)
+      if d < best:
+        best = d
+  return best
+
+proc playerTotal(id) =
+  var total = 0
+  for planet in planets():
+    if planet.owner == id:
+      total = total + planet.ships
+  return total
+
+proc alreadyAttacking(targetId) =
+  var count = 0
+  for ship in ships():
+    if ship.owner == myId() and ship.target == targetId:
+      count = count + 1
+  return count
+
+proc strikeGroup(x, y) =
+  # Up to three of our planets closest to the target.
+  var group = []
+  for round in 0 ..< 3:
+    var bestId = -1
+    var bestDist = 999999
+    for planet in planets():
+      if planet.owner == myId() and not contains(group, planet.id):
+        let d = dist(planet.x, planet.y, x, y)
+        if d < bestDist:
+          bestDist = d
+          bestId = planet.id
+    if bestId != -1:
+      group.add(bestId)
+  return group
+
+proc tryAttack(target) =
+  # Sends a strike group when it can win. Returns true only when a
+  # new wave was actually launched.
+  let group = strikeGroup(target.x, target.y)
+  if len(group) == 0:
+    return false
+  var power = 0
+  var far = 0
+  for id in group:
+    let planet = findPlanet(id)
+    # We send at 70 percent, keeping a garrison at home.
+    power = power + (planet.ships * 7) div 10
+    let d = dist(planet.x, planet.y, target.x, target.y)
+    if d > far:
+      far = d
+  # Defense at arrival: the garrison, a safety margin, and for player
+  # planets everything they will produce while our ships fly in.
+  # Travel takes about four ticks per five pixels.
+  var defense = target.ships + 4
+  if target.owner != 0:
+    defense = defense + ((far * 4) div 5) div target.growth + 4
+  if power > defense:
+    select(group)
+    sendTo(target.id)
+    return true
+  return false
+
+proc neutralTargets() =
+  # Neutral planet ids, most cost effective first.
+  var ids = []
+  var scores = []
+  for planet in planets():
+    if planet.owner == 0:
+      let d = nearestOwnDist(planet.x, planet.y)
+      let base = planet.ships + 4 + d div 8
+      ids.add(planet.id)
+      scores.add(base * planet.growth)
+  var order = []
+  for round in 0 ..< len(ids):
+    var bestIndex = -1
+    var bestScore = 999999999
+    for i in 0 ..< len(ids):
+      if not contains(order, ids[i]) and scores[i] < bestScore:
+        bestScore = scores[i]
+        bestIndex = i
+    order.add(ids[bestIndex])
+  return order
+
+proc nearestEnemyPlanet() =
+  var bestId = -1
+  var bestDist = 999999
+  for planet in planets():
+    if planet.owner != 0 and planet.owner != myId():
+      let d = nearestOwnDist(planet.x, planet.y)
+      if d < bestDist:
+        bestDist = d
+        bestId = planet.id
+  return bestId
+
+proc underAttackByOthers(enemyId) =
+  # True when a third player already has ships flying at the enemy.
+  for ship in ships():
+    if ship.owner != myId() and ship.owner != enemyId:
+      let target = findPlanet(ship.target)
+      if target.owner == enemyId:
+        return true
+  return false
+
+proc tick() =
+  if gameTick() % 60 != 0:
+    return
+  setOffense(70)
+
+  # Expand: take cost effective neutrals as fast as we can win them.
+  # Targets already being taken are skipped, not waited on, so many
+  # captures can be in the air at once.
+  for targetId in neutralTargets():
+    if alreadyAttacking(targetId) == 0:
+      if tryAttack(findPlanet(targetId)):
+        return
+
+  # War: hit the nearest neighbor when they are weaker. When they are
+  # stronger, only join in once someone else already started.
+  let enemyPlanetId = nearestEnemyPlanet()
+  if enemyPlanetId == -1:
+    return
+  if alreadyAttacking(enemyPlanetId) > 0:
+    return
+  let enemy = findPlanet(enemyPlanetId)
+  if playerTotal(myId()) > playerTotal(enemy.owner) + 10:
+    tryAttack(enemy)
+  else:
+    if underAttackByOthers(enemy.owner):
+      tryAttack(enemy)

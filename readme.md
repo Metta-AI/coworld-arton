@@ -80,6 +80,8 @@ Their actions mirror the human controls:
 
 A script that raises an error is disabled for the rest of the match. The player keeps producing ships but goes idle.
 
+Scripts are fully deterministic: the embedded nimmy build has floats disabled (use div and isqrt for math) and there is no built in randomness. A script that wants randomness brings its own seeded pseudo random generator.
+
 ## Art direction
 
 The game reads as a sumi-e ink-wash painting in motion: traditional ink and watercolor media for the simulation itself, with a thin neon-glow digital layer on top for player intent. Abstract, high contrast, no literal space imagery.

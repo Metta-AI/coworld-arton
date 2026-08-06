@@ -566,23 +566,27 @@ proc avoidPlanets(sim: var Sim) =
       ship.x = centerX + dx * minDist div dist
       ship.y = centerY + dy * minDist div dist
       # Contact. If the heading still points into the planet, turn
-      # along the tangent that leads toward the target, so ships
-      # slide around planets instead of getting stuck.
+      # along the tangent the ship is already moving along, so it
+      # slides around and never balances on the knife edge where the
+      # target sits dead behind the planet. Momentum picks the side,
+      # which cannot flicker, and turning at double rate means the
+      # escape always beats the target steering pulling back in.
       let
         radialX = dx div SubpixelScale
         radialY = dy div SubpixelScale
-        inward = cos256(ship.heading) * radialX +
-          sin256(ship.heading) * radialY < 0
+        headingX = cos256(ship.heading)
+        headingY = sin256(ship.heading)
+        inward = headingX * radialX + headingY * radialY < 0
       if inward:
-        let
-          targetPlanet = sim.planets[ship.targetPlanet]
-          toTargetX = targetPlanet.x - ship.x div SubpixelScale
-          toTargetY = targetPlanet.y - ship.y div SubpixelScale
-          alongLeft = -radialY * toTargetX + radialX * toTargetY
-        if alongLeft >= 0:
-          ship.heading = turnToward(ship.heading, -radialY, radialX)
-        else:
-          ship.heading = turnToward(ship.heading, radialY, -radialX)
+        let along = headingY * radialX - headingX * radialY
+        var
+          tangentX = -radialY
+          tangentY = radialX
+        if along < 0:
+          tangentX = radialY
+          tangentY = -radialX
+        ship.heading = turnToward(ship.heading, tangentX, tangentY)
+        ship.heading = turnToward(ship.heading, tangentX, tangentY)
 
 proc landShips(sim: var Sim) =
   ## Annihilates ships that reached their target planet. Friendly
