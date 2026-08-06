@@ -353,6 +353,20 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
       spawnY = source.y * SubpixelScale + spawnDir.y * spawnDistPixels
       velX = spawnDir.x * ShipSpeedSubpixels div SubpixelScale
       velY = spawnDir.y * ShipSpeedSubpixels div SubpixelScale
+    # A slot only spawns when it is actually free. Ships already out
+    # there, like an earlier wave passing the rim, block the slot and
+    # those ships stay on the planet for a later ring.
+    var blocked = false
+    for ship in sim.ships:
+      if ship.ownerId != wave.ownerId:
+        continue
+      if abs(ship.x - spawnX) >= ShipRadiusSubpixels * 2 or
+        abs(ship.y - spawnY) >= ShipRadiusSubpixels * 2:
+          continue
+      blocked = true
+      break
+    if blocked:
+      continue
     sim.ships.add(Ship(
       ownerId: wave.ownerId,
       targetPlanet: wave.targetPlanet,
