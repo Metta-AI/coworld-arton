@@ -310,17 +310,21 @@ proc dragSendSources(): seq[int32] =
   return @[dragFromPlanet]
 
 proc handleBoxSelect(boxRect: Rect) =
-  ## Box select: own planets inside the rect, shift adds.
+  ## Box select: own planets whose circle touches the rect at all,
+  ## not just their center. Shift adds.
   if not shiftDown():
     selected = @[]
   for planet in sim.planets:
     if planet.ownerId != HumanPlayer:
       continue
-    let center = vec2(float32(planet.x), float32(planet.y))
-    if center.x >= boxRect.x and
-      center.x <= boxRect.x + boxRect.w and
-      center.y >= boxRect.y and
-      center.y <= boxRect.y + boxRect.h and
+    let
+      center = vec2(float32(planet.x), float32(planet.y))
+      closest = vec2(
+        clamp(center.x, boxRect.x, boxRect.x + boxRect.w),
+        clamp(center.y, boxRect.y, boxRect.y + boxRect.h)
+      )
+      radius = float32(planet.radius)
+    if (center - closest).lengthSq <= radius * radius and
       planet.id notin selected:
         selected.add(planet.id)
 
