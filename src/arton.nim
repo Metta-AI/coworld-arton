@@ -16,18 +16,9 @@ const
   HumanPlayer = 1'i32
   NeutralFill = rgba(200, 200, 200, 255)
   NeutralStroke = rgba(90, 90, 90, 255)
-  PlayerFills = [
-    rgba(216, 180, 245, 255),
-    rgba(170, 200, 250, 255),
-    rgba(250, 170, 170, 255),
-    rgba(250, 215, 160, 255)
-  ]
-  PlayerStrokes = [
-    rgba(120, 40, 180, 255),
-    rgba(30, 80, 200, 255),
-    rgba(200, 30, 30, 255),
-    rgba(220, 130, 20, 255)
-  ]
+  ## Player one sits at this hue, the rest spread evenly around the
+  ## color wheel, so any number of players get distinct colors.
+  FirstPlayerHue = 280.0'f32
   SelectionColor = rgba(120, 40, 180, 255)
   HudColor = rgba(20, 20, 20, 255)
 
@@ -84,17 +75,28 @@ proc stepAgents(sim: var Sim) =
     if agent.failed and not wasFailed:
       echo "AI for player ", agent.playerId, " crashed: ", agent.error
 
+proc playerHue(ownerId: int32): float32 =
+  ## The owner's spot on the color wheel, hues spaced evenly by the
+  ## number of players in the game.
+  let count = max(sim.players.len, 1)
+  let slice = 360.0'f32 / float32(count)
+  var hue = FirstPlayerHue + float32(ownerId - 1) * slice
+  while hue >= 360.0'f32:
+    hue -= 360.0'f32
+  return hue
+
 proc fillColor(ownerId: int32): ColorRGBA =
-  ## Planet fill color for an owner.
+  ## Planet fill color for an owner: a light pastel of their hue.
   if ownerId == NeutralOwner:
     return NeutralFill
-  return PlayerFills[(ownerId - 1) mod PlayerFills.len]
+  return hsv(playerHue(ownerId), 35, 96).color.rgba
 
 proc strokeColor(ownerId: int32): ColorRGBA =
-  ## Planet outline and ship color for an owner.
+  ## Planet outline and ship color for an owner: a strong dark
+  ## version of their hue.
   if ownerId == NeutralOwner:
     return NeutralStroke
-  return PlayerStrokes[(ownerId - 1) mod PlayerStrokes.len]
+  return hsv(playerHue(ownerId), 85, 70).color.rgba
 
 proc offenseFactor(sim: Sim, playerId: int32): int32 =
   ## Reads a player's offense factor.
