@@ -112,7 +112,7 @@ It's compiled both native and to WASM, and must run in the browser.
 
 Deterministic core with dev graphics — simple shapes on a white background, playable by a single human.
 
-- [ ] Deterministic sim core
+- [x] Deterministic sim core
   - Fixed timestep tick loop; tick speed configurable from 1x (human time) up to as fast as possible
   - Simulation seed drives all randomness
   - 32-bit integer math only; no lossy hashtables or anything else that can break determinism
@@ -126,6 +126,14 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
   - Ships steer around planets, boids style, and navigate back on course after being pushed off it
   - Arrival: ship annihilates; +1 at a friendly planet, −1 at enemy/neutral, planet flips to the attacker when the count would drop below zero
 
+- [ ] Dev graphics
+  - Open window with windy
+  - use raw opengl context
+  - Use silky for UI
+  - Planets as flat circles with owner color and ship count text
+  - Ships as simple dots or triangles
+  - White background, no shaders
+
 - [ ] Human controls
   - Single click, shift click, box select, shift box select, double click (select all own planets)
   - Click a non-selected planet to send ships
@@ -136,10 +144,7 @@ Deterministic core with dev graphics — simple shapes on a white background, pl
   - Multiplayer: capture all non-neutral planets
   - Draw when time runs out
 
-- [ ] Dev graphics
-  - Planets as flat circles with owner color and ship count text
-  - Ships as simple dots or triangles
-  - White background, no shaders
+
 
 ## Phase 2: Browser build
 

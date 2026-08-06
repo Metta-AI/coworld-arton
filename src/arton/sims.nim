@@ -20,6 +20,16 @@ const
   ## both indexed by PlanetSize. Bigger planets produce faster.
   PlanetRadii* = [16'i32, 24'i32, 32'i32]
   GrowthIntervals* = [90'i32, 60'i32, 36'i32]
+  ## Ship positions use fixed point subpixels so movement stays
+  ## integer only while still being smooth.
+  SubpixelScale* = 256'i32
+  ShipSpeedSubpixels* = 204'i32
+  ShipRadiusPixels* = 3'i32
+  ShipRadiusSubpixels* = ShipRadiusPixels * SubpixelScale
+  ShipSpawnGapPixels* = 7'i32
+  ShipSpawnGapSubpixels* = ShipSpawnGapPixels * SubpixelScale
+  SpawnIntervalTicks* = 2'i32
+  PlanetAvoidGatePixels* = 64'i32
 
 type
   ArtonError* = object of CatchableError
@@ -42,6 +52,25 @@ type
     ships*: int32
     growthTicks*: int32
 
+  Ship* = object
+    ownerId*: int32
+    targetPlanet*: int32
+    ## Position and previous position in subpixels. Velocity is the
+    ## difference between them, verlet style.
+    x*: int32
+    y*: int32
+    prevX*: int32
+    prevY*: int32
+
+  Wave* = object
+    ## A send order that is still spawning ships at its source rim.
+    ownerId*: int32
+    sourcePlanet*: int32
+    targetPlanet*: int32
+    shipsLeft*: int32
+    cooldown*: int32
+    spawnIndex*: int32
+
   Player* = object
     id*: int32
     homePlanet*: int32
@@ -59,6 +88,8 @@ type
     tickCount*: int32
     planets*: seq[Planet]
     players*: seq[Player]
+    ships*: seq[Ship]
+    waves*: seq[Wave]
 
 proc initRng*(seed: uint32): Rng =
   ## Creates a generator from a seed. Zero is remapped as xorshift32
@@ -156,10 +187,236 @@ proc newSim*(config: SimConfig): Sim =
     ))
   return sim
 
-proc tick*(sim: var Sim) =
-  ## Advances the simulation by one tick. Player planets produce ships
-  ## at a rate based on their size, neutral planets do not.
-  inc sim.tickCount
+proc isqrt*(value: int32): int32 =
+  ## Deterministic integer square root.
+  doAssert value >= 0, "isqrt needs a non negative value"
+  var
+    remaining = uint32(value)
+    root = 0'u32
+    bit = 1'u32 shl 30
+  while bit > remaining:
+    bit = bit shr 2
+  while bit != 0:
+    if remaining >= root + bit:
+      remaining -= root + bit
+      root = (root shr 1) + bit
+    else:
+      root = root shr 1
+    bit = bit shr 2
+  return int32(root)
+
+proc send*(sim: var Sim, playerId, sourceId, targetId: int32) =
+  ## Orders ships from a player's planet to another planet. The wave
+  ## size is the source ship count scaled by the player's offense
+  ## factor. Invalid orders are ignored.
+  doAssert sourceId >= 0 and sourceId < int32(sim.planets.len),
+    "sourceId out of range"
+  doAssert targetId >= 0 and targetId < int32(sim.planets.len),
+    "targetId out of range"
+  if sourceId == targetId:
+    return
+  let source = sim.planets[sourceId]
+  if source.ownerId != playerId:
+    return
+  var factor = DefaultOffenseFactor
+  for player in sim.players:
+    if player.id == playerId:
+      factor = player.offenseFactor
+  let count = source.ships * factor div 100
+  if count <= 0:
+    return
+  sim.waves.add(Wave(
+    ownerId: playerId,
+    sourcePlanet: sourceId,
+    targetPlanet: targetId,
+    shipsLeft: count
+  ))
+
+proc spawnShip(sim: var Sim, wave: var Wave): bool =
+  ## Tries to spawn one wave ship at the source rim, facing the target.
+  ## Returns false when the launch arc has no room right now.
+  let
+    source = sim.planets[wave.sourcePlanet]
+    target = sim.planets[wave.targetPlanet]
+    dxPixels = target.x - source.x
+    dyPixels = target.y - source.y
+    distPixels = isqrt(dxPixels * dxPixels + dyPixels * dyPixels)
+  if distPixels == 0:
+    return false
+  let
+    dirX = dxPixels * SubpixelScale div distPixels
+    dirY = dyPixels * SubpixelScale div distPixels
+    maxSide = source.radius div ShipSpawnGapPixels
+    slots = maxSide * 2 + 1
+    slot = wave.spawnIndex mod slots
+    side =
+      if slot == 0:
+        0'i32
+      elif slot mod 2 == 1:
+        (slot + 1) div 2
+      else:
+        -(slot div 2)
+    spawnDistPixels = source.radius + ShipRadiusPixels + 2
+    spawnX = source.x * SubpixelScale + dirX * spawnDistPixels +
+      -dirY * side * ShipSpawnGapPixels
+    spawnY = source.y * SubpixelScale + dirY * spawnDistPixels +
+      dirX * side * ShipSpawnGapPixels
+  for ship in sim.ships:
+    if ship.ownerId != wave.ownerId:
+      continue
+    if abs(ship.x - spawnX) < ShipSpawnGapSubpixels and
+      abs(ship.y - spawnY) < ShipSpawnGapSubpixels:
+        return false
+  let
+    velX = dirX * ShipSpeedSubpixels div SubpixelScale
+    velY = dirY * ShipSpeedSubpixels div SubpixelScale
+  sim.ships.add(Ship(
+    ownerId: wave.ownerId,
+    targetPlanet: wave.targetPlanet,
+    x: spawnX,
+    y: spawnY,
+    prevX: spawnX - velX,
+    prevY: spawnY - velY
+  ))
+  inc wave.spawnIndex
+  dec wave.shipsLeft
+  dec sim.planets[wave.sourcePlanet].ships
+  return true
+
+proc spawnWaves(sim: var Sim) =
+  ## Spawns pending wave ships and drops finished or invalid waves.
+  var kept: seq[Wave]
+  for i in 0 ..< sim.waves.len:
+    var wave = sim.waves[i]
+    let source = sim.planets[wave.sourcePlanet]
+    if source.ownerId != wave.ownerId or source.ships <= 0:
+      continue
+    if wave.cooldown > 0:
+      dec wave.cooldown
+    elif sim.spawnShip(wave):
+      wave.cooldown = SpawnIntervalTicks
+    if wave.shipsLeft > 0:
+      kept.add(wave)
+  sim.waves = kept
+
+proc steerShips(sim: var Sim) =
+  ## Verlet moves every ship, steering it back toward its target so
+  ## pushes can knock it off course but never off mission.
+  for ship in sim.ships.mitems:
+    let
+      target = sim.planets[ship.targetPlanet]
+      dx = target.x * SubpixelScale - ship.x
+      dy = target.y * SubpixelScale - ship.y
+      dxPixels = dx div SubpixelScale
+      dyPixels = dy div SubpixelScale
+      distPixels = isqrt(dxPixels * dxPixels + dyPixels * dyPixels)
+    var
+      velX = ship.x - ship.prevX
+      velY = ship.y - ship.prevY
+    if distPixels > 0:
+      let
+        desiredX = dx * ShipSpeedSubpixels div
+          (distPixels * SubpixelScale)
+        desiredY = dy * ShipSpeedSubpixels div
+          (distPixels * SubpixelScale)
+      velX = (velX * 3 + desiredX) div 4
+      velY = (velY * 3 + desiredY) div 4
+    let speed = isqrt(velX * velX + velY * velY)
+    if speed > ShipSpeedSubpixels:
+      velX = velX * ShipSpeedSubpixels div speed
+      velY = velY * ShipSpeedSubpixels div speed
+    ship.prevX = ship.x
+    ship.prevY = ship.y
+    ship.x += velX
+    ship.y += velY
+
+proc pushShips(sim: var Sim) =
+  ## Pushes overlapping same player ships apart, sphere verlet style.
+  ## Ships of different players pass through each other.
+  for i in 0 ..< sim.ships.len:
+    for j in i + 1 ..< sim.ships.len:
+      if sim.ships[i].ownerId != sim.ships[j].ownerId:
+        continue
+      let
+        dx = sim.ships[j].x - sim.ships[i].x
+        dy = sim.ships[j].y - sim.ships[i].y
+        minDist = ShipRadiusSubpixels * 2
+      if abs(dx) >= minDist or abs(dy) >= minDist:
+        continue
+      let distSq = dx * dx + dy * dy
+      if distSq >= minDist * minDist:
+        continue
+      var
+        pushX = 0'i32
+        pushY = 0'i32
+      let dist = isqrt(distSq)
+      if dist == 0:
+        pushX = minDist div 2
+      else:
+        let overlap = minDist - dist
+        pushX = dx * (overlap div 2) div dist
+        pushY = dy * (overlap div 2) div dist
+      sim.ships[i].x -= pushX
+      sim.ships[i].y -= pushY
+      sim.ships[j].x += pushX
+      sim.ships[j].y += pushY
+
+proc avoidPlanets(sim: var Sim) =
+  ## Keeps ships outside planets they are not landing on, so swarms
+  ## flow around obstacles instead of tunneling through them.
+  for ship in sim.ships.mitems:
+    for planet in sim.planets:
+      if planet.id == ship.targetPlanet:
+        continue
+      let
+        dxPixels = ship.x div SubpixelScale - planet.x
+        dyPixels = ship.y div SubpixelScale - planet.y
+      if abs(dxPixels) > PlanetAvoidGatePixels or
+        abs(dyPixels) > PlanetAvoidGatePixels:
+          continue
+      let
+        centerX = planet.x * SubpixelScale
+        centerY = planet.y * SubpixelScale
+        dx = ship.x - centerX
+        dy = ship.y - centerY
+        minDist = (planet.radius + ShipRadiusPixels) * SubpixelScale
+        dist = isqrt(dx * dx + dy * dy)
+      if dist >= minDist:
+        continue
+      if dist == 0:
+        ship.x = centerX + minDist
+        continue
+      ship.x = centerX + dx * minDist div dist
+      ship.y = centerY + dy * minDist div dist
+
+proc landShips(sim: var Sim) =
+  ## Annihilates ships that reached their target planet. Friendly
+  ## arrivals reinforce, others attack and can flip the planet.
+  var kept: seq[Ship]
+  for ship in sim.ships:
+    let
+      planet = sim.planets[ship.targetPlanet]
+      dxPixels = ship.x div SubpixelScale - planet.x
+      dyPixels = ship.y div SubpixelScale - planet.y
+      landed = abs(dxPixels) <= planet.radius and
+        abs(dyPixels) <= planet.radius and
+        dxPixels * dxPixels + dyPixels * dyPixels <
+        planet.radius * planet.radius
+    if not landed:
+      kept.add(ship)
+      continue
+    if sim.planets[ship.targetPlanet].ownerId == ship.ownerId:
+      inc sim.planets[ship.targetPlanet].ships
+    elif sim.planets[ship.targetPlanet].ships == 0:
+      sim.planets[ship.targetPlanet].ownerId = ship.ownerId
+      sim.planets[ship.targetPlanet].growthTicks = 0
+    else:
+      dec sim.planets[ship.targetPlanet].ships
+  sim.ships = kept
+
+proc producePlanets(sim: var Sim) =
+  ## Player planets produce ships at a rate based on their size,
+  ## neutral planets do not.
   for planet in sim.planets.mitems:
     if planet.ownerId == NeutralOwner:
       continue
@@ -167,6 +424,16 @@ proc tick*(sim: var Sim) =
     if planet.growthTicks >= planet.growthInterval:
       planet.growthTicks = 0
       inc planet.ships
+
+proc tick*(sim: var Sim) =
+  ## Advances the simulation by one tick with a fixed phase order.
+  inc sim.tickCount
+  sim.spawnWaves()
+  sim.steerShips()
+  sim.pushShips()
+  sim.avoidPlanets()
+  sim.landShips()
+  sim.producePlanets()
 
 proc mix(hash: var uint32, value: int32) =
   ## Folds one value into an FNV-1a style hash.
@@ -194,4 +461,18 @@ proc stateHash*(sim: Sim): uint32 =
     hash.mix(player.id)
     hash.mix(player.homePlanet)
     hash.mix(player.offenseFactor)
+  for ship in sim.ships:
+    hash.mix(ship.ownerId)
+    hash.mix(ship.targetPlanet)
+    hash.mix(ship.x)
+    hash.mix(ship.y)
+    hash.mix(ship.prevX)
+    hash.mix(ship.prevY)
+  for wave in sim.waves:
+    hash.mix(wave.ownerId)
+    hash.mix(wave.sourcePlanet)
+    hash.mix(wave.targetPlanet)
+    hash.mix(wave.shipsLeft)
+    hash.mix(wave.cooldown)
+    hash.mix(wave.spawnIndex)
   return hash
