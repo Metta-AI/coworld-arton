@@ -18,7 +18,7 @@ const
   PlanetPlaceAttempts* = 1000'i32
   NeutralShipsMin* = 5'i32
   NeutralShipsMax* = 60'i32
-  DefaultOffenseFactor* = 100'i32
+  DefaultOffenseFactor* = 50'i32
   ## Planet radius in pixels and ship production interval in ticks,
   ## both indexed by PlanetSize. Bigger planets produce faster.
   PlanetRadii* = [16'i32, 24'i32, 32'i32]

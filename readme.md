@@ -36,7 +36,7 @@ Players send ships between planets:
   * the snap range is three times the planet's radius, nearest planet first; out of range there is no line and releasing sends nothing
   * the drag sends from the whole selection when it starts on a selected planet, otherwise just from the planet the drag started on
 
-The number of ships sent is governed by the player's offense factor, which ranges from 10% to 100%. It is set with the number keys: 1 = 10% up through 0 = 100%. It is a per-player setting, hidden from the other players.
+The number of ships sent is governed by the player's offense factor, which ranges from 10% to 100% and defaults to 50%. It is set with the number keys: 1 = 10% up through 0 = 100%. It is a per-player setting, hidden from the other players.
 
 Ship behavior:
 
