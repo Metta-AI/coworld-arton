@@ -12,7 +12,7 @@ const
   NeutralOwner* = 0'i32
   DefaultPlanetCount* = 24'i32
   DefaultPlayerCount* = 2'i32
-  DefaultMaxTicks* = TicksPerSecond * 60 * 5
+  DefaultMaxTicks* = TicksPerSecond * 60 * 10
   PlanetSpawnMargin* = 48'i32
   PlanetSpacing* = 24'i32
   PlanetPlaceAttempts* = 1000'i32

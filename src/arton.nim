@@ -32,6 +32,7 @@ var
   suppressClick = false
   demoEnabled = false
   shotIndex = 0
+  hudSpeed = 1.0
 
 proc aiPaths(): seq[string] =
   ## Script paths from repeated --ai=path arguments. Every flag adds
@@ -50,6 +51,26 @@ proc aiPaths(): seq[string] =
           path = path[0 ..< colon]
       for i in 0 ..< count:
         result.add(path)
+
+proc gameClock(tick: int32): string =
+  ## Game time as m:ss from a tick count.
+  let seconds = tick div TicksPerSecond
+  return $(seconds div 60) & ":" & align($(seconds mod 60), 2, '0')
+
+proc speedFlag(): float64 =
+  ## Sim speed multiplier from --speed=N. 1 is human time. Ignored
+  ## in headless mode, which always runs as fast as possible.
+  result = 1.0
+  for param in commandLineParams():
+    if param.startsWith("--speed="):
+      result = float64(parseInt(param.split("=")[1]))
+
+proc maxTicksFlag(): int32 =
+  ## Game end tick from --maxTicks=N, when a match becomes a draw.
+  result = DefaultMaxTicks
+  for param in commandLineParams():
+    if param.startsWith("--maxTicks="):
+      result = int32(parseInt(param.split("=")[1]))
 
 proc aiPlayerCount(): int32 =
   ## Players in the game: every --ai flag adds an AI player and every
@@ -280,7 +301,9 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
   ctx.fontSize = 16
   ctx.fillStyle = HudColor
   let hud = &"offense {sim.offenseFactor(HumanPlayer)}%  " &
+    &"time {gameClock(sim.tickCount)}  " &
     &"tick {sim.tickCount}  " &
+    &"speed {hudSpeed}x  " &
     &"demo {(if demoEnabled: \"on\" else: \"off\")} (D)  " &
     "screenshot (F2)"
   ctx.fillText(hud, vec2(10, 24))
@@ -334,11 +357,15 @@ proc runHeadless(shotPath: string) =
       demo = true
   sim = newSim(initSimConfig(
     seed = seed,
-    playerCount = aiPlayerCount()
+    playerCount = aiPlayerCount(),
+    maxTicks = maxTicksFlag()
   ))
   aiAgents = loadAgents(sim.config.playerCount)
   if ticks == -1:
     ticks = int(sim.config.maxTicks)
+  echo "game speed: as fast as possible, one game second is ",
+    TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
+    " (", gameClock(sim.config.maxTicks), ")"
   let start = epochTime()
   for i in 0 ..< ticks:
     if sim.outcome != MatchOngoing:
@@ -352,7 +379,8 @@ proc runHeadless(shotPath: string) =
 
   echo "result: ", sim.outcome,
     (if sim.outcome == MatchWon: " player " & $sim.winner else: ""),
-    " at tick ", sim.tickCount
+    " at tick ", sim.tickCount, " (game time ",
+    gameClock(sim.tickCount), ")"
   for player in sim.players:
     var
       planetCount = 0
@@ -402,8 +430,17 @@ block:
   if shotPath != "" or noWindow:
     runHeadless(shotPath)
 
-sim = newSim(initSimConfig(seed = 1, playerCount = aiPlayerCount()))
+sim = newSim(initSimConfig(
+  seed = 1,
+  playerCount = aiPlayerCount(),
+  maxTicks = maxTicksFlag()
+))
 aiAgents = loadAgents(sim.config.playerCount)
+let speedMultiplier = speedFlag()
+hudSpeed = speedMultiplier
+echo "game speed: ", speedMultiplier, "x, one game second is ",
+  TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
+  " (", gameClock(sim.config.maxTicks), ")"
 
 let window = newWindow(
   "Arton",
@@ -545,9 +582,10 @@ var
   accumulator = 0.0
 
 proc stepSim() =
-  ## Advances the sim on a fixed timestep from real elapsed time.
+  ## Advances the sim on a fixed timestep from real elapsed time,
+  ## scaled by the speed multiplier.
   let now = epochTime()
-  accumulator += min(now - lastTime, 0.25)
+  accumulator += min(now - lastTime, 0.25) * speedMultiplier
   lastTime = now
   while accumulator >= TickSeconds:
     accumulator -= TickSeconds
