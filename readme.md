@@ -31,9 +31,10 @@ Players send ships between planets:
   * double click selects all of your planets
   * clicking empty space or a planet you don't own clears the selection
 2. Send ships by dragging, the only way to send:
-  * press on one of your planets and drag onto any planet, own planets included, then release to send there
+  * press on one of your planets and drag toward any planet, own planets included, then release to send there
+  * the targeting line snaps to the planet you would send to and that planet gets a highlight circle
+  * the snap range is three times the planet's radius, nearest planet first; out of range there is no line and releasing sends nothing
   * the drag sends from the whole selection when it starts on a selected planet, otherwise just from the planet the drag started on
-  * dragging never changes the selection
 
 The number of ships sent is governed by the player's offense factor, which ranges from 10% to 100%. It is set with the number keys: 1 = 10% up through 0 = 100%. It is a per-player setting, hidden from the other players.
 

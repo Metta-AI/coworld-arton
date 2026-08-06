@@ -115,7 +115,7 @@ proc demoOrders(sim: var Sim, playerId: int32) =
     sim.send(playerId, source, target)
 
 proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
-    showBox: bool, dragPos: Vec2, dragSources: seq[int32],
+    showBox: bool, dragTarget: int32, dragSources: seq[int32],
     pixelScale: float32 = 1.0): Image =
   ## Draws the whole sim in world coordinates, scaled up to the real
   ## output pixel size so nothing gets blurry. Dev graphics only:
@@ -146,15 +146,29 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       float32(planet.radius) + 5
     ))
 
-  if dragSources.len > 0:
-    # Targeting lines from every sending planet to the drag point.
+  if dragTarget != -1 and dragSources.len > 0:
+    # Targeting lines snap to the target planet, which also gets a
+    # highlight ring. No snapped planet, no lines at all.
+    let
+      target = sim.planets[dragTarget]
+      targetCenter = vec2(float32(target.x), float32(target.y))
+    var anyLine = false
     ctx.strokeStyle = SelectionColor
     ctx.lineWidth = 2
     for planetId in dragSources:
+      if planetId == dragTarget:
+        continue
+      anyLine = true
       let planet = sim.planets[planetId]
       ctx.strokeSegment(segment(
         vec2(float32(planet.x), float32(planet.y)),
-        dragPos
+        targetCenter
+      ))
+    if anyLine:
+      ctx.lineWidth = 3
+      ctx.strokeCircle(circle(
+        targetCenter,
+        float32(target.radius) + 5
       ))
 
   for ship in sim.ships:
@@ -256,7 +270,7 @@ proc headlessShot() =
       for player in 1'i32 .. sim.config.playerCount:
         sim.demoOrders(player)
     sim.tick()
-  let frame = sim.renderFrame(@[], rect(0, 0, 0, 0), false, vec2(0, 0), @[])
+  let frame = sim.renderFrame(@[], rect(0, 0, 0, 0), false, -1, @[])
   frame.writeFile(shotPath)
   echo "Saved ", shotPath, " at tick ", sim.tickCount
   quit(0)
@@ -299,15 +313,18 @@ proc shiftDown(): bool =
   return window.buttonDown[KeyLeftShift] or
     window.buttonDown[KeyRightShift]
 
-proc dragSendSources(): seq[int32] =
-  ## Planets that send on a drag release: the whole selection when
-  ## the drag started on a selected planet, otherwise just the
-  ## planet the drag started on. Dragging never changes selection.
-  if dragFromPlanet == -1:
-    return @[]
-  if dragFromPlanet in selected:
-    return selected
-  return @[dragFromPlanet]
+proc snapTarget(pos: Vec2): int32 =
+  ## Planet a send drag snaps to: the nearest planet whose center is
+  ## within three of its radii of the cursor, or -1 for none.
+  result = -1
+  var best = 1e9'f32
+  for planet in sim.planets:
+    let
+      center = vec2(float32(planet.x), float32(planet.y))
+      dist = (pos - center).length
+    if dist <= float32(planet.radius) * 3 and dist < best:
+      best = dist
+      result = planet.id
 
 proc handleBoxSelect(boxRect: Rect) =
   ## Box select: own planets whose circle touches the rect at all,
@@ -337,12 +354,20 @@ window.onButtonPress = proc(button: Button) =
     dragStart = mouseWorld()
     dragging = true
     let planetId = sim.planetAt(dragStart)
-    dragFromPlanet =
-      if planetId != -1 and
-        sim.planets[planetId].ownerId == HumanPlayer:
-          planetId
-      else:
-        -1
+    if planetId != -1 and
+      sim.planets[planetId].ownerId == HumanPlayer:
+        dragFromPlanet = planetId
+        # Selection updates on press. A plain press on a planet that
+        # is not selected replaces the selection, shift press adds.
+        # Pressing an already selected planet keeps the group, so a
+        # drag can send from the whole selection.
+        if planetId notin selected:
+          if shiftDown():
+            selected.add(planetId)
+          else:
+            selected = @[planetId]
+    else:
+      dragFromPlanet = -1
   of Key1: sim.setOffenseFactor(HumanPlayer, 10)
   of Key2: sim.setOffenseFactor(HumanPlayer, 20)
   of Key3: sim.setOffenseFactor(HumanPlayer, 30)
@@ -357,7 +382,7 @@ window.onButtonPress = proc(button: Button) =
     demoEnabled = not demoEnabled
   of KeyF2:
     let box = boxRectNow(mouseWorld())
-    takeScreenshot(sim.renderFrame(selected, box, false, vec2(0, 0), @[]))
+    takeScreenshot(sim.renderFrame(selected, box, false, -1, @[]))
   else:
     discard
 
@@ -377,22 +402,13 @@ window.onButtonRelease = proc(button: Button) =
     moved = (pos - dragStart).length
   if fromPlanet != -1:
     if moved > DragThreshold:
-      # Dragging is the only way to send ships. Any planet can be
-      # the target, own planets included.
-      let targetId = sim.planetAt(pos)
+      # Dragging is the only way to send ships. The target is the
+      # snapped planet, no snap means no send.
+      let targetId = snapTarget(pos)
       if targetId != -1:
-        let sources =
-          if fromPlanet in selected:
-            selected
-          else:
-            @[fromPlanet]
-        for sourceId in sources:
+        for sourceId in selected:
           sim.send(HumanPlayer, sourceId, targetId)
-    elif shiftDown():
-      if fromPlanet notin selected:
-        selected.add(fromPlanet)
-    else:
-      selected = @[fromPlanet]
+    # A plain click already updated the selection on press.
   elif moved > DragThreshold:
     handleBoxSelect(boxRectNow(pos))
   elif not shiftDown():
@@ -434,9 +450,15 @@ proc drawWindow() =
     pos = mouseWorld()
     inDrag = dragging and (pos - dragStart).length > DragThreshold
     showBox = inDrag and dragFromPlanet == -1
+    sendDrag = inDrag and dragFromPlanet != -1
+    dragTarget =
+      if sendDrag:
+        snapTarget(pos)
+      else:
+        -1
     dragSources =
-      if inDrag:
-        dragSendSources()
+      if sendDrag:
+        selected
       else:
         @[]
     view = viewTransform(windowSize)
@@ -444,7 +466,7 @@ proc drawWindow() =
       selected,
       boxRectNow(pos),
       showBox,
-      pos,
+      dragTarget,
       dragSources,
       view.scale
     )
