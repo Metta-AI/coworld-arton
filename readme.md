@@ -129,6 +129,8 @@ Written in Nim:
 
 It's compiled both native and to WASM, and must run in the browser.
 
+Profiling is opt in via fluffy. Build with -d:profileTracePath=tmp/trace.json -d:profileFrames=1200 and the run writes a Chrome style trace of the sim phases, the renderer, the agents and nimmy VM stepping after that many ticks. Open it with fluffy or any Chrome tracing viewer. Note the per statement nimmy measure inflates its own numbers, read it for call counts and use the stepAgents span for real script cost.
+
 
 # Implementation Phases
 

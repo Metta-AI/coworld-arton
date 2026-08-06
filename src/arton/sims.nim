@@ -3,7 +3,7 @@
 ## builds stay bit-identical. Floats appear only at compile time to
 ## bake the integer trig table.
 
-import std/math
+import std/math, profiles
 
 const
   TicksPerSecond* = 60'i32
@@ -395,7 +395,7 @@ proc spawnRing(sim: var Sim, wave: var Wave) =
     dec wave.shipsLeft
     dec sim.planets[wave.sourcePlanet].ships
 
-proc spawnWaves(sim: var Sim) =
+proc spawnWaves(sim: var Sim) {.measure.} =
   ## Launches pending wave rings and drops finished or invalid waves.
   var kept: seq[Wave]
   for i in 0 ..< sim.waves.len:
@@ -412,7 +412,7 @@ proc spawnWaves(sim: var Sim) =
       kept.add(wave)
   sim.waves = kept
 
-proc steerShips(sim: var Sim) =
+proc steerShips(sim: var Sim) {.measure.} =
   ## Moves every ship forward along its heading at full speed while
   ## the heading slowly rotates toward the target. Ships always move
   ## in their direction of travel, so they can never stall.
@@ -502,7 +502,7 @@ proc shipCell(ship: Ship): int32 =
     )
   return cellY * CollisionGridSide + cellX
 
-proc pushShips(sim: var Sim) =
+proc pushShips(sim: var Sim) {.measure.} =
   ## Pushes overlapping same player ships apart using a uniform grid
   ## broadphase: counting sort into cells, then only within cell and
   ## forward neighbor pairs. Deterministic order, no N squared scan.
@@ -565,7 +565,7 @@ proc pushShips(sim: var Sim) =
     sim.ships[i].x += applyX
     sim.ships[i].y += applyY
 
-proc avoidPlanets(sim: var Sim) =
+proc avoidPlanets(sim: var Sim) {.measure.} =
   ## Keeps ships outside planets they are not landing on, so swarms
   ## flow around obstacles instead of tunneling through them.
   for ship in sim.ships.mitems:
@@ -618,7 +618,7 @@ proc avoidPlanets(sim: var Sim) =
         ship.heading = turnToward(ship.heading, tangentX, tangentY)
         ship.heading = turnToward(ship.heading, tangentX, tangentY)
 
-proc landShips(sim: var Sim) =
+proc landShips(sim: var Sim) {.measure.} =
   ## Annihilates ships that reached their target planet. Friendly
   ## arrivals reinforce, others attack and can flip the planet.
   var kept: seq[Ship]
@@ -646,7 +646,7 @@ proc landShips(sim: var Sim) =
       dec sim.planets[ship.targetPlanet].ships
   sim.ships = kept
 
-proc producePlanets(sim: var Sim) =
+proc producePlanets(sim: var Sim) {.measure.} =
   ## Player planets produce ships at a rate based on their size,
   ## neutral planets do not.
   for planet in sim.planets.mitems:
@@ -704,7 +704,7 @@ proc checkOutcome(sim: var Sim) =
   if sim.tickCount >= sim.config.maxTicks:
     sim.outcome = MatchDraw
 
-proc tick*(sim: var Sim) =
+proc tick*(sim: var Sim) {.measure.} =
   ## Advances the simulation by one tick with a fixed phase order.
   ## Does nothing once the match is decided.
   if sim.outcome != MatchOngoing:

@@ -5,7 +5,7 @@
 import
   std/[math, os, strformat, strutils, times],
   boxy, bumpy, opengl, pixie, windy,
-  arton/agents, arton/sims
+  arton/agents, arton/profiles, arton/sims
 
 const
   FontPath = "data/IBMPlexSans-Regular.ttf"
@@ -118,7 +118,7 @@ proc loadAgents(playerCount: int32): seq[Agent] =
       echo "AI for player ", playerId, ": ", path
     result.add(agent)
 
-proc stepAgents(sim: var Sim) =
+proc stepAgents(sim: var Sim) {.measure.} =
   ## Runs every AI script on its fixed cadence.
   if sim.tickCount mod AgentIntervalTicks != 0:
     return
@@ -220,7 +220,7 @@ proc demoOrders(sim: var Sim, playerId: int32) =
 
 proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     showBox: bool, dragTarget: int32, dragSources: seq[int32],
-    pixelScale: float32 = 1.0): Image =
+    pixelScale: float32 = 1.0): Image {.measure.} =
   ## Draws the whole sim in world coordinates, scaled up to the real
   ## output pixel size so nothing gets blurry. Dev graphics only:
   ## flat circles, triangle ships and plain text on white.
@@ -386,6 +386,9 @@ proc runHeadless(shotPath: string) =
   aiAgents = loadAgents(sim.config.playerCount)
   if ticks == -1:
     ticks = int(sim.config.maxTicks)
+  startProfileTrace()
+  defer:
+    finishProfileTrace()
   echo "map: ", sim.config.planetCount, " planets, ",
     sim.config.playerCount, " players, ", agentOpsPerTurn,
     " instructions per turn"
@@ -401,6 +404,8 @@ proc runHeadless(shotPath: string) =
         sim.demoOrders(player)
     stepAgents(sim)
     sim.tick()
+    if profileShouldDump(int(sim.tickCount)):
+      finishProfileTrace()
   let elapsed = epochTime() - start
 
   echo "result: ", sim.outcome,
@@ -646,7 +651,7 @@ proc stepSim() =
       keep.add(planetId)
   selected = keep
 
-proc drawWindow() =
+proc drawWindow() {.measure.} =
   ## Renders and presents one frame. The window size and dpi are
   ## polled fresh at the top and everything in the frame, including
   ## the viewport, derives from that one snapshot, so a frame can
@@ -688,9 +693,13 @@ proc drawWindow() =
   bxy.endFrame()
   window.swapBuffers()
 
+startProfileTrace()
+
 window.onFrame = proc() =
   stepSim()
   drawWindow()
+  if profileShouldDump(int(sim.tickCount)):
+    finishProfileTrace()
 
 while not window.closeRequested:
   pollEvents()

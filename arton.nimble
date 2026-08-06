@@ -7,3 +7,4 @@ srcDir = "src"
 
 requires "nim >= 2.2.4"
 requires "nimmy >= 0.1.0"
+requires "fluffy >= 1.0.0"

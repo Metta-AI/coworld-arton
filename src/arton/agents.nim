@@ -13,6 +13,7 @@
 import
   std/tables,
   nimmy, nimmy/parser, nimmy/vm,
+  profiles,
   sims
 
 const
@@ -205,7 +206,7 @@ proc newAgent*(playerId: int32, source: string): Agent =
     agent.error = e.msg
   return agent
 
-proc step*(agent: Agent, sim: var Sim) =
+proc step*(agent: Agent, sim: var Sim) {.measure.} =
   ## Runs one AI turn with an instruction budget. A finished script
   ## gets a fresh tick() call, a paused one resumes right where it
   ## stopped last turn. Script errors disable the agent.
