@@ -72,6 +72,13 @@ proc maxTicksFlag(): int32 =
     if param.startsWith("--maxTicks="):
       result = int32(parseInt(param.split("=")[1]))
 
+proc maxOpsFlag(): int =
+  ## Per turn script instruction budget from --maxOps=N.
+  result = DefaultOpsPerTurn
+  for param in commandLineParams():
+    if param.startsWith("--maxOps="):
+      result = parseInt(param.split("=")[1])
+
 proc planetsFlag(playerCount: int32): int32 =
   ## Planet count from --planets:N (or --planets=N), never below the
   ## player count so everyone still gets a home planet.
@@ -372,11 +379,13 @@ proc runHeadless(shotPath: string) =
     playerCount = aiPlayerCount(),
     maxTicks = maxTicksFlag()
   ))
+  agentOpsPerTurn = maxOpsFlag()
   aiAgents = loadAgents(sim.config.playerCount)
   if ticks == -1:
     ticks = int(sim.config.maxTicks)
   echo "map: ", sim.config.planetCount, " planets, ",
-    sim.config.playerCount, " players"
+    sim.config.playerCount, " players, ", agentOpsPerTurn,
+    " instructions per turn"
   echo "game speed: as fast as possible, one game second is ",
     TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
     " (", gameClock(sim.config.maxTicks), ")"
@@ -468,11 +477,13 @@ sim = newSim(initSimConfig(
   playerCount = aiPlayerCount(),
   maxTicks = maxTicksFlag()
 ))
+agentOpsPerTurn = maxOpsFlag()
 aiAgents = loadAgents(sim.config.playerCount)
 let speedMultiplier = speedFlag()
 hudSpeed = speedMultiplier
 echo "map: ", sim.config.planetCount, " planets, ",
-  sim.config.playerCount, " players"
+  sim.config.playerCount, " players, ", agentOpsPerTurn,
+  " instructions per turn"
 echo "game speed: ", speedMultiplier, "x, one game second is ",
   TicksPerSecond, " ticks, game ends at tick ", sim.config.maxTicks,
   " (", gameClock(sim.config.maxTicks), ")"

@@ -17,13 +17,18 @@ import
 
 const
   AgentIntervalTicks* = 15'i32
-  ## Instruction budget per turn. A script that runs longer is paused
-  ## and resumes exactly where it stopped on its next turn, so a
-  ## while true loop cannot take out the game, it only stalls its own
-  ## player. Scripts that finish normally get a fresh tick() call.
-  AgentOpsPerTurn* = 1000
+  ## Default instruction budget per turn. A script that runs longer
+  ## is paused and resumes exactly where it stopped on its next turn,
+  ## so a while true loop cannot take out the game, it only stalls
+  ## its own player. Scripts that finish normally get a fresh tick()
+  ## call.
+  DefaultOpsPerTurn* = 1000
   ## Budget for the script's top level when it first loads.
   AgentInitOps* = 100000
+
+var
+  ## Per turn instruction budget, overridable from the command line.
+  agentOpsPerTurn* = DefaultOpsPerTurn
 
 type
   Agent* = ref object
@@ -218,7 +223,7 @@ proc step*(agent: Agent, sim: var Sim) =
     if agent.vm.vm.isFinished:
       agent.vm.vm.load(agent.tickAst)
     var ops = 0
-    while ops < AgentOpsPerTurn and not agent.vm.vm.isFinished:
+    while ops < agentOpsPerTurn and not agent.vm.vm.isFinished:
       agent.vm.vm.step()
       inc ops
       inc agent.ops
