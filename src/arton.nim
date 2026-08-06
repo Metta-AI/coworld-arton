@@ -57,37 +57,40 @@ proc gameClock(tick: int32): string =
   let seconds = tick div TicksPerSecond
   return $(seconds div 60) & ":" & align($(seconds mod 60), 2, '0')
 
+proc flagValue(name: string): string =
+  ## Value of --name=value or --name:value, empty when absent.
+  let prefix = "--" & name
+  for param in commandLineParams():
+    if param.startsWith(prefix) and param.len > prefix.len + 1:
+      let sep = param[prefix.len]
+      if sep == '=' or sep == ':':
+        return param[prefix.len + 1 .. ^1]
+
 proc speedFlag(): float64 =
-  ## Sim speed multiplier from --speed=N. 1 is human time. Ignored
+  ## Sim speed multiplier from --speed:N. 1 is human time. Ignored
   ## in headless mode, which always runs as fast as possible.
   result = 1.0
-  for param in commandLineParams():
-    if param.startsWith("--speed="):
-      result = float64(parseInt(param.split("=")[1]))
+  if flagValue("speed") != "":
+    result = float64(parseInt(flagValue("speed")))
 
 proc maxTicksFlag(): int32 =
-  ## Game end tick from --maxTicks=N, when a match becomes a draw.
+  ## Game end tick from --maxTicks:N, when a match becomes a draw.
   result = DefaultMaxTicks
-  for param in commandLineParams():
-    if param.startsWith("--maxTicks="):
-      result = int32(parseInt(param.split("=")[1]))
+  if flagValue("maxTicks") != "":
+    result = int32(parseInt(flagValue("maxTicks")))
 
 proc maxOpsFlag(): int =
-  ## Per turn script instruction budget from --maxOps=N.
+  ## Per turn script instruction budget from --maxOps:N.
   result = DefaultOpsPerTurn
-  for param in commandLineParams():
-    if param.startsWith("--maxOps="):
-      result = parseInt(param.split("=")[1])
+  if flagValue("maxOps") != "":
+    result = parseInt(flagValue("maxOps"))
 
 proc planetsFlag(playerCount: int32): int32 =
-  ## Planet count from --planets:N (or --planets=N), never below the
-  ## player count so everyone still gets a home planet.
+  ## Planet count from --planets:N, never below the player count so
+  ## everyone still gets a home planet.
   result = DefaultPlanetCount
-  for param in commandLineParams():
-    if param.startsWith("--planets") and param.len > 10:
-      let sep = param[9]
-      if sep == ':' or sep == '=':
-        result = int32(parseInt(param[10 .. ^1]))
+  if flagValue("planets") != "":
+    result = int32(parseInt(flagValue("planets")))
   result = max(result, playerCount)
 
 proc aiPlayerCount(): int32 =
@@ -366,12 +369,12 @@ proc runHeadless(shotPath: string) =
     ticks = -1
     seed = 1'u32
     demo = false
+  if flagValue("ticks") != "":
+    ticks = parseInt(flagValue("ticks"))
+  if flagValue("seed") != "":
+    seed = uint32(parseInt(flagValue("seed")))
   for param in commandLineParams():
-    if param.startsWith("--ticks="):
-      ticks = parseInt(param.split("=")[1])
-    elif param.startsWith("--seed="):
-      seed = uint32(parseInt(param.split("=")[1]))
-    elif param == "--demo":
+    if param == "--demo":
       demo = true
   sim = newSim(initSimConfig(
     seed = seed,
@@ -460,15 +463,8 @@ proc determinismHash(): uint32 =
 echo "determinism hash ", determinismHash()
 
 block:
-  var
-    shotPath = ""
-    window = true
-  for param in commandLineParams():
-    if param.startsWith("--shot="):
-      shotPath = param.split("=")[1]
-    elif param == "--window:false" or param == "--window=false":
-      window = false
-  if shotPath != "" or not window:
+  let shotPath = flagValue("shot")
+  if shotPath != "" or flagValue("window") == "false":
     runHeadless(shotPath)
 
 sim = newSim(initSimConfig(
@@ -629,10 +625,14 @@ var
 
 proc stepSim() =
   ## Advances the sim on a fixed timestep from real elapsed time,
-  ## scaled by the speed multiplier.
+  ## scaled by the speed multiplier and fully decoupled from the
+  ## frame rate: one frame may run many ticks or none at all.
   let now = epochTime()
   accumulator += min(now - lastTime, 0.25) * speedMultiplier
   lastTime = now
+  # Keep the app responsive at silly speeds: at most four game
+  # seconds advance per frame, any further backlog is dropped.
+  accumulator = min(accumulator, 4.0)
   while accumulator >= TickSeconds:
     accumulator -= TickSeconds
     if demoEnabled:
