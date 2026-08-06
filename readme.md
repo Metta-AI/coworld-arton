@@ -30,7 +30,9 @@ Players send ships between planets:
   * box select to select a rectangular area
   * shift box select to add to the selection
   * double click to select all of the player's planets
-2. Click any other planet to send ships there.
+2. Click any planet outside the selection to send ships there, own planets included.
+  * clicking an own planet with nothing selected selects it instead
+  * shift click on an own planet always adds it to the selection, never sends
 
 The number of ships sent is governed by the player's offense factor, which ranges from 10% to 100%. It is set with the number keys: 1 = 10% up through 0 = 100%. It is a per-player setting, hidden from the other players.
 

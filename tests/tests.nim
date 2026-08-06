@@ -111,10 +111,13 @@ suite "isqrt":
 
 suite "ship movement":
   test "friendly reinforcement is exact":
+    # The far neutral planet keeps the match ongoing, otherwise a
+    # single player owning everything wins instantly and freezes.
     var sim = makeSim(
       @[
         makePlanet(0, 200, 360, PlanetSmall, 1, 40),
-        makePlanet(1, 500, 360, PlanetSmall, 1, 10)
+        makePlanet(1, 500, 360, PlanetSmall, 1, 10),
+        makePlanet(2, 1150, 100, PlanetSmall, NeutralOwner, 5)
       ],
       @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
     )
@@ -141,7 +144,8 @@ suite "ship movement":
     var sim = makeSim(
       @[
         makePlanet(0, 200, 360, PlanetSmall, 1, 40),
-        makePlanet(1, 500, 360, PlanetSmall, NeutralOwner, 10)
+        makePlanet(1, 500, 360, PlanetSmall, NeutralOwner, 10),
+        makePlanet(2, 1150, 100, PlanetSmall, NeutralOwner, 5)
       ],
       @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
     )
@@ -194,7 +198,8 @@ suite "ship movement":
     var sim = makeSim(
       @[
         makePlanet(0, 200, 360, PlanetSmall, 1, 40),
-        makePlanet(1, 500, 360, PlanetSmall, 1, 10)
+        makePlanet(1, 500, 360, PlanetSmall, 1, 10),
+        makePlanet(2, 1150, 100, PlanetSmall, NeutralOwner, 5)
       ],
       @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
     )
@@ -212,7 +217,8 @@ suite "ship movement":
     var sim = makeSim(
       @[
         makePlanet(0, 200, 360, PlanetSmall, 1, 40),
-        makePlanet(1, 1000, 360, PlanetSmall, 1, 10)
+        makePlanet(1, 1000, 360, PlanetSmall, 1, 10),
+        makePlanet(2, 1150, 100, PlanetSmall, NeutralOwner, 5)
       ],
       @[Player(id: 1, homePlanet: 0, offenseFactor: 100)]
     )

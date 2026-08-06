@@ -24,9 +24,9 @@ const
   ## integer only while still being smooth.
   SubpixelScale* = 256'i32
   ShipSpeedSubpixels* = 204'i32
-  ShipRadiusPixels* = 3'i32
+  ShipRadiusPixels* = 6'i32
   ShipRadiusSubpixels* = ShipRadiusPixels * SubpixelScale
-  ShipSpawnGapPixels* = 7'i32
+  ShipSpawnGapPixels* = 13'i32
   ShipSpawnGapSubpixels* = ShipSpawnGapPixels * SubpixelScale
   SpawnIntervalTicks* = 2'i32
   PlanetAvoidGatePixels* = 64'i32

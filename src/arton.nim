@@ -287,21 +287,27 @@ proc shiftDown(): bool =
     window.buttonDown[KeyRightShift]
 
 proc handleClick(pos: Vec2) =
-  ## Single click: own planet selects, other planet gets sent to.
+  ## Single click: empty space clears the selection, shift click on
+  ## an own planet adds it, an own planet with nothing selected gets
+  ## selected, and any planet outside the selection gets sent to,
+  ## own planets included.
   let planetId = sim.planetAt(pos)
   if planetId == -1:
     if not shiftDown():
       selected = @[]
     return
-  if sim.planets[planetId].ownerId == HumanPlayer:
-    if shiftDown():
-      if planetId notin selected:
-        selected.add(planetId)
-    else:
-      selected = @[planetId]
-  else:
-    for sourceId in selected:
-      sim.send(HumanPlayer, sourceId, planetId)
+  let own = sim.planets[planetId].ownerId == HumanPlayer
+  if own and shiftDown():
+    if planetId notin selected:
+      selected.add(planetId)
+    return
+  if own and selected.len == 0:
+    selected = @[planetId]
+    return
+  if selected == @[planetId]:
+    return
+  for sourceId in selected:
+    sim.send(HumanPlayer, sourceId, planetId)
 
 proc handleBoxSelect(boxRect: Rect) =
   ## Box select: own planets inside the rect, shift adds.
@@ -392,12 +398,12 @@ proc drawWindow() =
     return
   makeContextCurrent(window)
   let
-    showBox = dragging and
-      (mouseWorld() - dragStart).length > DragThreshold
+    pos = mouseWorld()
+    showBox = dragging and (pos - dragStart).length > DragThreshold
     view = viewTransform(windowSize)
     frame = sim.renderFrame(
       selected,
-      boxRectNow(mouseWorld()),
+      boxRectNow(pos),
       showBox,
       view.scale
     )
