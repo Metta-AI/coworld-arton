@@ -67,7 +67,7 @@ AI scripts are written in nimmy. Each script is a single .nimmy file in the play
     nim r src/arton.nim --ai=players/alpha.nimmy --ai=players/grabber.nimmy
     nim r src/arton.nim --ai=players/alpha.nimmy:5
 
-Adding --noWindow runs the match headless as fast as possible, sim only, and prints the result with per player planet and ship counts.
+Adding --window:false runs the match headless as fast as possible, sim only, and prints the result with per player planet and ship counts.
 
 Adding --player reserves a human slot on top of the AI players, so --player with two --ai flags is a three player game where the human is player 1 and the AIs are players 2 and 3.
 

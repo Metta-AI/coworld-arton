@@ -462,13 +462,13 @@ echo "determinism hash ", determinismHash()
 block:
   var
     shotPath = ""
-    noWindow = false
+    window = true
   for param in commandLineParams():
     if param.startsWith("--shot="):
       shotPath = param.split("=")[1]
-    elif param == "--noWindow":
-      noWindow = true
-  if shotPath != "" or noWindow:
+    elif param == "--window:false" or param == "--window=false":
+      window = false
+  if shotPath != "" or not window:
     runHeadless(shotPath)
 
 sim = newSim(initSimConfig(
