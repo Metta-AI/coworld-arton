@@ -32,6 +32,11 @@ const
   ShipSpawnGapPixels* = 19'i32
   RingIntervalTicks* = 20'i32
   PushIterations* = 2'i32
+  ## Ship collision broadphase grid. Cells are bigger than the ship
+  ## interaction diameter so only neighbor cells need checking.
+  CollisionCellPixels* = 32'i32
+  CollisionGridSide* = WorldWidth div CollisionCellPixels + 2
+  CollisionCellCount* = CollisionGridSide * CollisionGridSide
   PlanetAvoidGatePixels* = 64'i32
   ## Integer trig: 256 headings around the circle, values scaled by
   ## TrigScale. Baked at compile time so runtime stays float free.
@@ -363,36 +368,96 @@ proc steerShips(sim: var Sim) =
     ship.x += velX
     ship.y += velY
 
-proc pushShips(sim: var Sim) =
-  ## Pushes overlapping same player ships apart, sphere verlet style.
+proc pushPair(sim: var Sim, i, j: int32) =
+  ## Resolves one potential same player ship overlap, verlet style.
   ## Ships of different players pass through each other.
-  for i in 0 ..< sim.ships.len:
-    for j in i + 1 ..< sim.ships.len:
-      if sim.ships[i].ownerId != sim.ships[j].ownerId:
+  if sim.ships[i].ownerId != sim.ships[j].ownerId:
+    return
+  let
+    dx = sim.ships[j].x - sim.ships[i].x
+    dy = sim.ships[j].y - sim.ships[i].y
+    minDist = ShipRadiusSubpixels * 2
+  if abs(dx) >= minDist or abs(dy) >= minDist:
+    return
+  let distSq = dx * dx + dy * dy
+  if distSq >= minDist * minDist:
+    return
+  var
+    pushX = 0'i32
+    pushY = 0'i32
+  let dist = isqrt(distSq)
+  if dist == 0:
+    pushX = minDist div 2
+  else:
+    let overlap = minDist - dist
+    pushX = dx * (overlap div 2) div dist
+    pushY = dy * (overlap div 2) div dist
+  sim.ships[i].x -= pushX
+  sim.ships[i].y -= pushY
+  sim.ships[j].x += pushX
+  sim.ships[j].y += pushY
+
+proc shipCell(ship: Ship): int32 =
+  ## Grid cell index for a ship, clamped to the grid edges.
+  let
+    cellX = clamp(
+      ship.x div SubpixelScale div CollisionCellPixels,
+      0'i32,
+      CollisionGridSide - 1
+    )
+    cellY = clamp(
+      ship.y div SubpixelScale div CollisionCellPixels,
+      0'i32,
+      CollisionGridSide - 1
+    )
+  return cellY * CollisionGridSide + cellX
+
+proc pushShips(sim: var Sim) =
+  ## Pushes overlapping same player ships apart using a uniform grid
+  ## broadphase: counting sort into cells, then only within cell and
+  ## forward neighbor pairs. Deterministic order, no N squared scan.
+  let shipCount = int32(sim.ships.len)
+  if shipCount < 2:
+    return
+  var
+    cellStart = newSeq[int32](CollisionCellCount + 1)
+    order = newSeq[int32](shipCount)
+  for i in 0 ..< shipCount:
+    inc cellStart[sim.ships[i].shipCell + 1]
+  for cell in 1 .. CollisionCellCount:
+    cellStart[cell] += cellStart[cell - 1]
+  var fill = cellStart
+  for i in 0 ..< shipCount:
+    let cell = sim.ships[i].shipCell
+    order[fill[cell]] = i
+    inc fill[cell]
+
+  # Forward neighbor offsets cover every unordered cell pair once.
+  const Neighbors = [
+    [1'i32, 0'i32],
+    [-1'i32, 1'i32],
+    [0'i32, 1'i32],
+    [1'i32, 1'i32]
+  ]
+  for cellY in 0 ..< CollisionGridSide:
+    for cellX in 0 ..< CollisionGridSide:
+      let cell = cellY * CollisionGridSide + cellX
+      if cellStart[cell] == cellStart[cell + 1]:
         continue
-      let
-        dx = sim.ships[j].x - sim.ships[i].x
-        dy = sim.ships[j].y - sim.ships[i].y
-        minDist = ShipRadiusSubpixels * 2
-      if abs(dx) >= minDist or abs(dy) >= minDist:
-        continue
-      let distSq = dx * dx + dy * dy
-      if distSq >= minDist * minDist:
-        continue
-      var
-        pushX = 0'i32
-        pushY = 0'i32
-      let dist = isqrt(distSq)
-      if dist == 0:
-        pushX = minDist div 2
-      else:
-        let overlap = minDist - dist
-        pushX = dx * (overlap div 2) div dist
-        pushY = dy * (overlap div 2) div dist
-      sim.ships[i].x -= pushX
-      sim.ships[i].y -= pushY
-      sim.ships[j].x += pushX
-      sim.ships[j].y += pushY
+      for a in cellStart[cell] ..< cellStart[cell + 1]:
+        for b in a + 1 ..< cellStart[cell + 1]:
+          sim.pushPair(order[a], order[b])
+      for neighbor in Neighbors:
+        let
+          otherX = cellX + neighbor[0]
+          otherY = cellY + neighbor[1]
+        if otherX < 0 or otherX >= CollisionGridSide or
+          otherY >= CollisionGridSide:
+            continue
+        let other = otherY * CollisionGridSide + otherX
+        for a in cellStart[cell] ..< cellStart[cell + 1]:
+          for b in cellStart[other] ..< cellStart[other + 1]:
+            sim.pushPair(order[a], order[b])
 
 proc avoidPlanets(sim: var Sim) =
   ## Keeps ships outside planets they are not landing on, so swarms
@@ -431,10 +496,13 @@ proc landShips(sim: var Sim) =
       planet = sim.planets[ship.targetPlanet]
       dxPixels = ship.x div SubpixelScale - planet.x
       dyPixels = ship.y div SubpixelScale - planet.y
-      landed = abs(dxPixels) <= planet.radius and
-        abs(dyPixels) <= planet.radius and
+      # Ships annihilate on rim contact, the same collision circle
+      # that keeps passing ships out: planet radius + ship radius.
+      contact = planet.radius + ShipRadiusPixels
+      landed = abs(dxPixels) <= contact and
+        abs(dyPixels) <= contact and
         dxPixels * dxPixels + dyPixels * dyPixels <
-        planet.radius * planet.radius
+        contact * contact
     if not landed:
       kept.add(ship)
       continue
