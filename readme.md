@@ -38,9 +38,10 @@ The number of ships sent is governed by the player's offense factor, which range
 
 Ship behavior:
 
-- Ships depart gradually around the rim of their planet, following a dispersion pattern so they don't overlap.
-  * They start facing the planet they are going to.
-  * They fill up in an arc around the planet until there is no more room. They start moving and then new ships spawn pushing them outward.
+- Ships depart in rings around the rim of their planet.
+  * A ring holds as many ships as fit around the planet's circumference, so bigger planets launch ships faster.
+  * When fewer ships remain than fill a ring, they leave as an arc centered on the direction they are going.
+  * Rings launch every third of a second until the wave is done.
 - Ships in transit push each other apart, sphere verlet simulation style — but only ships of the same player interact. Enemy ships pass through each other (enemy ships don't interact under normal rules).
 - Ships also collide with planets and steer around them, boids style.
 - Ships can't be redirected mid-flight: once they leave their planet they fly to their destination and that's it. Pushes can knock them well off course though, so they navigate back toward their target.

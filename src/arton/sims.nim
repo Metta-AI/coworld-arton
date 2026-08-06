@@ -1,11 +1,14 @@
 ## Deterministic Arton simulation core.
 ## All simulation math uses explicit 32-bit integers so native and WASM
-## builds stay bit-identical.
+## builds stay bit-identical. Floats appear only at compile time to
+## bake the integer trig table.
+
+import std/math
 
 const
   TicksPerSecond* = 60'i32
-  WorldWidth* = 1280'i32
-  WorldHeight* = 720'i32
+  WorldWidth* = 1000'i32
+  WorldHeight* = 1000'i32
   NeutralOwner* = 0'i32
   DefaultPlanetCount* = 24'i32
   DefaultPlayerCount* = 2'i32
@@ -24,12 +27,21 @@ const
   ## integer only while still being smooth.
   SubpixelScale* = 256'i32
   ShipSpeedSubpixels* = 204'i32
-  ShipRadiusPixels* = 6'i32
+  ShipRadiusPixels* = 9'i32
   ShipRadiusSubpixels* = ShipRadiusPixels * SubpixelScale
-  ShipSpawnGapPixels* = 13'i32
-  ShipSpawnGapSubpixels* = ShipSpawnGapPixels * SubpixelScale
-  SpawnIntervalTicks* = 2'i32
+  ShipSpawnGapPixels* = 19'i32
+  RingIntervalTicks* = 20'i32
+  PushIterations* = 2'i32
   PlanetAvoidGatePixels* = 64'i32
+  ## Integer trig: 256 headings around the circle, values scaled by
+  ## TrigScale. Baked at compile time so runtime stays float free.
+  HeadingCount* = 256'i32
+  TrigScale* = 4096'i32
+  SinTable* = block:
+    var table: array[256, int32]
+    for i in 0 ..< 256:
+      table[i] = int32(round(sin(float(i) * 2.0 * PI / 256.0) * 4096.0))
+    table
 
 type
   ArtonError* = object of CatchableError
@@ -68,13 +80,12 @@ type
     prevY*: int32
 
   Wave* = object
-    ## A send order that is still spawning ships at its source rim.
+    ## A send order that is still launching rings at its source rim.
     ownerId*: int32
     sourcePlanet*: int32
     targetPlanet*: int32
     shipsLeft*: int32
     cooldown*: int32
-    spawnIndex*: int32
 
   Player* = object
     id*: int32
@@ -239,9 +250,29 @@ proc send*(sim: var Sim, playerId, sourceId, targetId: int32) =
     shipsLeft: count
   ))
 
-proc spawnShip(sim: var Sim, wave: var Wave): bool =
-  ## Tries to spawn one wave ship at the source rim, facing the target.
-  ## Returns false when the launch arc has no room right now.
+proc sin256*(heading: int32): int32 =
+  ## Sine of a 256 step heading, scaled by TrigScale.
+  return SinTable[heading and 255]
+
+proc cos256*(heading: int32): int32 =
+  ## Cosine of a 256 step heading, scaled by TrigScale.
+  return SinTable[(heading + 64) and 255]
+
+proc rotate(x, y, heading: int32): tuple[x, y: int32] =
+  ## Rotates a small vector by a 256 step heading with integer trig.
+  let
+    c = cos256(heading)
+    s = sin256(heading)
+  return (
+    (x * c - y * s) div TrigScale,
+    (x * s + y * c) div TrigScale
+  )
+
+proc spawnRing(sim: var Sim, wave: var Wave) =
+  ## Launches one ring of ships around the source rim. A full ring
+  ## holds as many ships as fit around the circumference, so bigger
+  ## planets launch faster. A partial ring leaves as an arc centered
+  ## on the direction the ships are going.
   let
     source = sim.planets[wave.sourcePlanet]
     target = sim.planets[wave.targetPlanet]
@@ -249,49 +280,43 @@ proc spawnShip(sim: var Sim, wave: var Wave): bool =
     dyPixels = target.y - source.y
     distPixels = isqrt(dxPixels * dxPixels + dyPixels * dyPixels)
   if distPixels == 0:
-    return false
+    return
   let
     dirX = dxPixels * SubpixelScale div distPixels
     dirY = dyPixels * SubpixelScale div distPixels
-    maxSide = source.radius div ShipSpawnGapPixels
-    slots = maxSide * 2 + 1
-    slot = wave.spawnIndex mod slots
-    side =
-      if slot == 0:
-        0'i32
-      elif slot mod 2 == 1:
-        (slot + 1) div 2
-      else:
-        -(slot div 2)
     spawnDistPixels = source.radius + ShipRadiusPixels + 2
-    spawnX = source.x * SubpixelScale + dirX * spawnDistPixels +
-      -dirY * side * ShipSpawnGapPixels
-    spawnY = source.y * SubpixelScale + dirY * spawnDistPixels +
-      dirX * side * ShipSpawnGapPixels
-  for ship in sim.ships:
-    if ship.ownerId != wave.ownerId:
-      continue
-    if abs(ship.x - spawnX) < ShipSpawnGapSubpixels and
-      abs(ship.y - spawnY) < ShipSpawnGapSubpixels:
-        return false
-  let
-    velX = dirX * ShipSpeedSubpixels div SubpixelScale
-    velY = dirY * ShipSpeedSubpixels div SubpixelScale
-  sim.ships.add(Ship(
-    ownerId: wave.ownerId,
-    targetPlanet: wave.targetPlanet,
-    x: spawnX,
-    y: spawnY,
-    prevX: spawnX - velX,
-    prevY: spawnY - velY
-  ))
-  inc wave.spawnIndex
-  dec wave.shipsLeft
-  dec sim.planets[wave.sourcePlanet].ships
-  return true
+    circumference = 628 * spawnDistPixels div 100
+    capacity = max(circumference div ShipSpawnGapPixels, 1)
+    count = min(min(wave.shipsLeft, source.ships), capacity)
+    step = HeadingCount div capacity
+  for i in 0 ..< count:
+    # Slots alternate around the facing direction, so a partial ring
+    # is an arc centered on it and a full ring closes the circle.
+    let
+      side = (i + 1) div 2
+      heading =
+        if i mod 2 == 1:
+          int32(side) * step
+        else:
+          -int32(side) * step
+      spawnDir = rotate(dirX, dirY, heading)
+      spawnX = source.x * SubpixelScale + spawnDir.x * spawnDistPixels
+      spawnY = source.y * SubpixelScale + spawnDir.y * spawnDistPixels
+      velX = spawnDir.x * ShipSpeedSubpixels div SubpixelScale
+      velY = spawnDir.y * ShipSpeedSubpixels div SubpixelScale
+    sim.ships.add(Ship(
+      ownerId: wave.ownerId,
+      targetPlanet: wave.targetPlanet,
+      x: spawnX,
+      y: spawnY,
+      prevX: spawnX - velX,
+      prevY: spawnY - velY
+    ))
+    dec wave.shipsLeft
+    dec sim.planets[wave.sourcePlanet].ships
 
 proc spawnWaves(sim: var Sim) =
-  ## Spawns pending wave ships and drops finished or invalid waves.
+  ## Launches pending wave rings and drops finished or invalid waves.
   var kept: seq[Wave]
   for i in 0 ..< sim.waves.len:
     var wave = sim.waves[i]
@@ -300,8 +325,9 @@ proc spawnWaves(sim: var Sim) =
       continue
     if wave.cooldown > 0:
       dec wave.cooldown
-    elif sim.spawnShip(wave):
-      wave.cooldown = SpawnIntervalTicks
+    else:
+      sim.spawnRing(wave)
+      wave.cooldown = RingIntervalTicks
     if wave.shipsLeft > 0:
       kept.add(wave)
   sim.waves = kept
@@ -487,7 +513,8 @@ proc tick*(sim: var Sim) =
   inc sim.tickCount
   sim.spawnWaves()
   sim.steerShips()
-  sim.pushShips()
+  for i in 0 ..< PushIterations:
+    sim.pushShips()
   sim.avoidPlanets()
   sim.landShips()
   sim.producePlanets()
@@ -534,5 +561,4 @@ proc stateHash*(sim: Sim): uint32 =
     hash.mix(wave.targetPlanet)
     hash.mix(wave.shipsLeft)
     hash.mix(wave.cooldown)
-    hash.mix(wave.spawnIndex)
   return hash

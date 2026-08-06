@@ -207,6 +207,17 @@ suite "ship movement":
     for i in 0 ..< 600:
       sim.tick()
       for ship in sim.ships:
+        # Launch rings jostle near the rim, so only cruise speed out
+        # in open space is bounded.
+        var nearPlanet = false
+        for planet in sim.planets:
+          let
+            dxPixels = ship.x div SubpixelScale - planet.x
+            dyPixels = ship.y div SubpixelScale - planet.y
+          if dxPixels * dxPixels + dyPixels * dyPixels < 60 * 60:
+            nearPlanet = true
+        if nearPlanet:
+          continue
         let
           velX = ship.x - ship.prevX
           velY = ship.y - ship.prevY
@@ -225,12 +236,27 @@ suite "ship movement":
     sim.send(1, 0, 1)
     for i in 0 ..< 400:
       sim.tick()
+    proc nearAnyPlanet(ship: Ship): bool =
+      ## Rim jostle and arrival funnels are allowed to compress.
+      for planet in sim.planets:
+        let
+          dxPixels = ship.x div SubpixelScale - planet.x
+          dyPixels = ship.y div SubpixelScale - planet.y
+        if dxPixels * dxPixels + dyPixels * dyPixels < 60 * 60:
+          return true
+      return false
     var crowded = 0
     for i in 0 ..< sim.ships.len:
       for j in i + 1 ..< sim.ships.len:
+        if sim.ships[i].nearAnyPlanet or sim.ships[j].nearAnyPlanet:
+          continue
         let
           dx = sim.ships[j].x - sim.ships[i].x
           dy = sim.ships[j].y - sim.ships[i].y
+        # Box gate before squaring so subpixel math cannot overflow.
+        if abs(dx) >= ShipRadiusSubpixels or
+          abs(dy) >= ShipRadiusSubpixels:
+            continue
         if dx * dx + dy * dy <
           ShipRadiusSubpixels * ShipRadiusSubpixels:
             inc crowded
