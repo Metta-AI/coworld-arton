@@ -24,15 +24,16 @@ A map contains multiple planets of varying sizes.
 
 Players send ships between planets:
 
-1. Select one or more of your planets:
-  * single click to select a single planet
-  * shift click to add to the selection
-  * box select to select a rectangular area
-  * shift box select to add to the selection
-  * double click to select all of the player's planets
-2. Click any planet outside the selection to send ships there, own planets included.
-  * clicking an own planet with nothing selected selects it instead
-  * shift click on an own planet always adds it to the selection, never sends
+1. Select your planets. Clicking always selects, it never sends:
+  * click one of your planets to select just it
+  * shift click adds it to the selection
+  * drag from empty space or from any planet you don't own for a box select, shift box select adds
+  * double click selects all of your planets
+  * clicking empty space or a planet you don't own clears the selection
+2. Send ships by dragging, the only way to send:
+  * press on one of your planets and drag onto any planet, own planets included, then release to send there
+  * the drag sends from the whole selection when it starts on a selected planet, otherwise just from the planet the drag started on
+  * dragging never changes the selection
 
 The number of ships sent is governed by the player's offense factor, which ranges from 10% to 100%. It is set with the number keys: 1 = 10% up through 0 = 100%. It is a per-player setting, hidden from the other players.
 
