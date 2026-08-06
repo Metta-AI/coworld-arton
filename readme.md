@@ -46,6 +46,7 @@ Ship behavior:
   * Rings launch every third of a second until the wave is done.
 - Ships always move forward along their heading at the uniform ship speed, and the heading slowly rotates toward the target. Rings launch heading away from the planet, so ships from the back side arc around and line up on the target over time.
 - Ships in transit push each other apart, sphere verlet simulation style — but only ships of the same player interact. Enemy ships pass through each other (enemy ships don't interact under normal rules).
+- Colliding ships also average their headings a little, boids style. When two friendly streams meet head-on they shear around each other, some ships going up and some down, instead of grinding straight through.
 - Ships collide with planets. A ship pressed against a planet turns along the tangent that leads toward its target, so it slides around and never gets stuck.
 - Ships can't be redirected mid-flight: once they leave their planet they fly to their destination and that's it. Pushes can knock them well off course though, so they navigate back toward their target.
 

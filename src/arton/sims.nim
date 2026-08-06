@@ -45,6 +45,9 @@ const
   ## How many heading steps a ship can rotate per tick. A full half
   ## turn takes about one second.
   TurnRateSteps* = 2'i32
+  ## Boids style alignment: colliding ships average their headings a
+  ## little. An eighth of the difference, capped at this many steps.
+  AlignMaxSteps* = 4'i32
   SinTable* = block:
     var table: array[256, int32]
     for i in 0 ..< 256:
@@ -418,6 +421,16 @@ proc pushPair(sim: var Sim, i, j: int32) =
   sim.ships[i].y -= pushY
   sim.ships[j].x += pushX
   sim.ships[j].y += pushY
+  # A little boids alignment: colliding ships average their headings
+  # slightly. Head-on streams shear apart, some up and some down,
+  # instead of grinding straight through each other.
+  let
+    diff = ((sim.ships[j].heading - sim.ships[i].heading + 128) and
+      255) - 128
+    nudge = clamp(diff div 8, -AlignMaxSteps, AlignMaxSteps)
+  if nudge != 0:
+    sim.ships[i].heading = (sim.ships[i].heading + nudge) and 255
+    sim.ships[j].heading = (sim.ships[j].heading - nudge) and 255
 
 proc shipCell(ship: Ship): int32 =
   ## Grid cell index for a ship, clamped to the grid edges.
