@@ -38,3 +38,8 @@ when defined(emscripten):
     -s ALLOW_MEMORY_GROWTH
     """).replace("\n", " ")
   )
+else:
+  when not defined(debug):
+    --define:noAutoGLerrorCheck
+    --define:release
+    --define:ssl

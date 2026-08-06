@@ -318,17 +318,15 @@ proc boxRectNow(mouseWorld: Vec2): Rect =
     hi = vec2(max(dragStart.x, mouseWorld.x), max(dragStart.y, mouseWorld.y))
   return rect(lo, hi - lo)
 
-proc headlessShot() =
-  ## Runs the sim without a window and writes one screenshot.
+proc runHeadless(shotPath: string) =
+  ## Runs the sim without a window as fast as possible and prints
+  ## the result. With a shot path it also writes one screenshot.
   var
-    shotPath = ""
-    ticks = 600
+    ticks = -1
     seed = 1'u32
     demo = false
   for param in commandLineParams():
-    if param.startsWith("--shot="):
-      shotPath = param.split("=")[1]
-    elif param.startsWith("--ticks="):
+    if param.startsWith("--ticks="):
       ticks = parseInt(param.split("=")[1])
     elif param.startsWith("--seed="):
       seed = uint32(parseInt(param.split("=")[1]))
@@ -339,15 +337,45 @@ proc headlessShot() =
     playerCount = aiPlayerCount()
   ))
   aiAgents = loadAgents(sim.config.playerCount)
+  if ticks == -1:
+    ticks = int(sim.config.maxTicks)
+  let start = epochTime()
   for i in 0 ..< ticks:
+    if sim.outcome != MatchOngoing:
+      break
     if demo:
       for player in 1'i32 .. sim.config.playerCount:
         sim.demoOrders(player)
     stepAgents(sim)
     sim.tick()
-  let frame = sim.renderFrame(@[], rect(0, 0, 0, 0), false, -1, @[])
-  frame.writeFile(shotPath)
-  echo "Saved ", shotPath, " at tick ", sim.tickCount
+  let elapsed = epochTime() - start
+
+  echo "result: ", sim.outcome,
+    (if sim.outcome == MatchWon: " player " & $sim.winner else: ""),
+    " at tick ", sim.tickCount
+  for player in sim.players:
+    var
+      planetCount = 0
+      shipCount = 0'i32
+    for planet in sim.planets:
+      if planet.ownerId == player.id:
+        inc planetCount
+        shipCount += planet.ships
+    for ship in sim.ships:
+      if ship.ownerId == player.id:
+        inc shipCount
+    var note = ""
+    for agent in aiAgents:
+      if agent.playerId == player.id and agent.failed:
+        note = "  CRASHED: " & agent.error
+    echo "player ", player.id, ": ", planetCount, " planets, ",
+      shipCount, " ships", note
+  echo "elapsed ", formatFloat(elapsed, ffDecimal, 2), "s, ",
+    int(float(sim.tickCount) / max(elapsed, 0.001)), " ticks/s"
+  if shotPath != "":
+    let frame = sim.renderFrame(@[], rect(0, 0, 0, 0), false, -1, @[])
+    frame.writeFile(shotPath)
+    echo "Saved ", shotPath, " at tick ", sim.tickCount
   quit(0)
 
 proc determinismHash(): uint32 =
@@ -362,9 +390,17 @@ proc determinismHash(): uint32 =
 
 echo "determinism hash ", determinismHash()
 
-for param in commandLineParams():
-  if param.startsWith("--shot="):
-    headlessShot()
+block:
+  var
+    shotPath = ""
+    noWindow = false
+  for param in commandLineParams():
+    if param.startsWith("--shot="):
+      shotPath = param.split("=")[1]
+    elif param == "--noWindow":
+      noWindow = true
+  if shotPath != "" or noWindow:
+    runHeadless(shotPath)
 
 sim = newSim(initSimConfig(seed = 1, playerCount = aiPlayerCount()))
 aiAgents = loadAgents(sim.config.playerCount)

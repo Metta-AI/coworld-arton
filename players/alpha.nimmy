@@ -106,16 +106,31 @@ proc neutralTargets() =
     order.add(ids[bestIndex])
   return order
 
-proc nearestEnemyPlanet() =
-  var bestId = -1
-  var bestDist = 999999
+proc enemyTargets() =
+  # Enemy planet ids, closest to our planets first.
+  var ids = []
+  var dists = []
   for planet in planets():
     if planet.owner != 0 and planet.owner != myId():
-      let d = nearestOwnDist(planet.x, planet.y)
-      if d < bestDist:
-        bestDist = d
-        bestId = planet.id
-  return bestId
+      ids.add(planet.id)
+      dists.add(nearestOwnDist(planet.x, planet.y))
+  var order = []
+  for round in 0 ..< len(ids):
+    var bestIndex = -1
+    var bestDist = 999999999
+    for i in 0 ..< len(ids):
+      if not contains(order, ids[i]) and dists[i] < bestDist:
+        bestDist = dists[i]
+        bestIndex = i
+    order.add(ids[bestIndex])
+  return order
+
+proc alivePlayers() =
+  var seen = []
+  for planet in planets():
+    if planet.owner != 0 and not contains(seen, planet.owner):
+      seen.add(planet.owner)
+  return len(seen)
 
 proc underAttackByOthers(enemyId) =
   # True when a third player already has ships flying at the enemy.
@@ -139,16 +154,29 @@ proc tick() =
       if tryAttack(findPlanet(targetId)):
         return
 
-  # War: hit the nearest neighbor when they are weaker. When they are
-  # stronger, only join in once someone else already started.
-  let enemyPlanetId = nearestEnemyPlanet()
-  if enemyPlanetId == -1:
-    return
-  if alreadyAttacking(enemyPlanetId) > 0:
-    return
-  let enemy = findPlanet(enemyPlanetId)
-  if playerTotal(myId()) > playerTotal(enemy.owner) + 10:
-    tryAttack(enemy)
-  else:
-    if underAttackByOthers(enemy.owner):
-      tryAttack(enemy)
+  # No war on purpose while neutral planets remain. Waves already in
+  # the air still hit a player when someone takes the neutral first,
+  # which is attacking by accident and fine.
+  for planet in planets():
+    if planet.owner == 0:
+      return
+
+  # War: work through enemy planets closest first, like expansion.
+  # Weaker owners are fair game. Stronger owners only once someone
+  # else already started on them, or in a duel where nobody else is
+  # ever coming to start the fight for us.
+  for targetId in enemyTargets():
+    if alreadyAttacking(targetId) == 0:
+      let enemy = findPlanet(targetId)
+      var allowed = false
+      if playerTotal(myId()) > playerTotal(enemy.owner) + 10:
+        allowed = true
+      else:
+        if underAttackByOthers(enemy.owner):
+          allowed = true
+        else:
+          if alivePlayers() == 2:
+            allowed = true
+      if allowed:
+        if tryAttack(enemy):
+          return
