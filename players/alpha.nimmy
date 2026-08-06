@@ -1,11 +1,13 @@
-# Alpha. Expands to the most cost effective neutral planets first and
-# only commits to attacks its strike group can actually win.
+# Alpha. Attacks the most cost effective planets first and only
+# commits to attacks its strike group can actually win.
 #
 # Target score, lower is better:
-#   (garrison + margin + dist / 8) * growth
-# Cheap, close and fast growing planets come first. A strike group is
-# up to three of our planets closest to the target, sent only when
-# their combined ships beat the expected defense at arrival.
+#   (garrison + margin + dist * 8) * growth^3, times 4 for players
+# Close big planets come first, weak players next door beat neutrals
+# across the map. A strike group is up to three of our planets
+# closest to the target, sent only when their combined ships beat
+# the expected defense at arrival. Rear planets ferry ships to the
+# most endangered front planet whenever no strike launches.
 
 proc dist(x1, y1, x2, y2) =
   let dx = x1 - x2
@@ -77,48 +79,49 @@ proc tryAttack(target) =
     return true
   return false
 
-proc neutralTargets() =
-  # Neutral planet ids, most cost effective first.
+proc warAllowed(ownerId) =
+  # Weaker players are fair game. Stronger players only once someone
+  # else already started on them, or in a duel where nobody else is
+  # ever coming to start the fight for us.
+  if playerTotal(myId()) > playerTotal(ownerId) + 10:
+    return true
+  if underAttackByOthers(ownerId):
+    return true
+  if alivePlayers() == 2:
+    return true
+  return false
+
+proc rankedTargets() =
+  # Every planet worth attacking, most cost effective first. Heavy
+  # distance penalty: expanding next door beats shipping across the
+  # map, always. Growth counts cubed, so big planets are always
+  # worth going for over the little ones. Enemy planets cost four
+  # times as much on top, so a close neutral beats a weak player,
+  # but a weak player next door beats a neutral far away.
   var ids = []
   var scores = []
   for planet in planets():
-    if planet.owner == 0:
-      let d = nearestOwnDist(planet.x, planet.y)
-      # Heavy distance penalty, two ships per pixel: expanding next
-      # door beats shipping across the map, always. Growth counts
-      # squared, so a big planet is worth paying for and a slow
-      # small one rarely is.
-      let base = planet.ships + 4 + d * 2
-      ids.add(planet.id)
-      scores.add(base * planet.growth * planet.growth)
+    if planet.owner != myId():
+      if planet.owner == 0 or warAllowed(planet.owner):
+        let d = nearestOwnDist(planet.x, planet.y)
+        # Eight ships of cost per pixel: anything far away has to be
+        # spectacular to be worth it.
+        let base = planet.ships + 4 + d * 8
+        var score = base * planet.growth * planet.growth * planet.growth
+        if planet.owner != 0:
+          score = score * 4
+        ids.add(planet.id)
+        scores.add(score)
   var order = []
   for round in 0 ..< len(ids):
     var bestIndex = -1
-    var bestScore = 999999999
+    var bestScore = 999999999999999
     for i in 0 ..< len(ids):
       if not contains(order, ids[i]) and scores[i] < bestScore:
         bestScore = scores[i]
         bestIndex = i
-    order.add(ids[bestIndex])
-  return order
-
-proc enemyTargets() =
-  # Enemy planet ids, closest to our planets first.
-  var ids = []
-  var dists = []
-  for planet in planets():
-    if planet.owner != 0 and planet.owner != myId():
-      ids.add(planet.id)
-      dists.add(nearestOwnDist(planet.x, planet.y))
-  var order = []
-  for round in 0 ..< len(ids):
-    var bestIndex = -1
-    var bestDist = 999999999
-    for i in 0 ..< len(ids):
-      if not contains(order, ids[i]) and dists[i] < bestDist:
-        bestDist = dists[i]
-        bestIndex = i
-    order.add(ids[bestIndex])
+    if bestIndex != -1:
+      order.add(ids[bestIndex])
   return order
 
 proc nearestEnemyDist(x, y) =
@@ -179,42 +182,22 @@ proc tick() =
     return
   setOffense(70)
 
-  # Expand: take cost effective neutrals as fast as we can win them.
-  # Targets already being taken are skipped, not waited on, so many
-  # captures can be in the air at once. Neutrals that anyone else is
-  # already flying at are skipped too: no point stacking onto the
-  # same cheap planet everyone noticed at once.
-  for targetId in neutralTargets():
-    if inbound(targetId) == 0:
-      if tryAttack(findPlanet(targetId)):
+  # One ranked list for neutrals and enemy planets together. Targets
+  # already being taken are skipped, not waited on, so many captures
+  # can be in the air at once. Neutrals that anyone else is already
+  # flying at are skipped too: no point stacking onto the same cheap
+  # planet everyone noticed at once.
+  for targetId in rankedTargets():
+    let target = findPlanet(targetId)
+    var free = false
+    if target.owner == 0:
+      free = inbound(targetId) == 0
+    else:
+      free = inbound(targetId, myId()) == 0
+    if free:
+      if tryAttack(target):
         return
 
-  # No war on purpose while neutral planets remain. Waves already in
-  # the air still hit a player when someone takes the neutral first,
-  # which is attacking by accident and fine.
-  for planet in planets():
-    if planet.owner == 0:
-      return
-
-  # War: work through enemy planets closest first, like expansion.
-  # Weaker owners are fair game. Stronger owners only once someone
-  # else already started on them, or in a duel where nobody else is
-  # ever coming to start the fight for us.
-  for targetId in enemyTargets():
-    if inbound(targetId, myId()) == 0:
-      let enemy = findPlanet(targetId)
-      var allowed = false
-      if playerTotal(myId()) > playerTotal(enemy.owner) + 10:
-        allowed = true
-      else:
-        if underAttackByOthers(enemy.owner):
-          allowed = true
-        else:
-          if alivePlayers() == 2:
-            allowed = true
-      if allowed:
-        if tryAttack(enemy):
-          return
-
-  # No strike this cycle: shore up the front line instead.
+  # No strike this cycle: shore up the front line instead. Safety
+  # runs from the first tick of the game.
   reinforce()
