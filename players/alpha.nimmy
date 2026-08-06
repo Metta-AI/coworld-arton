@@ -121,6 +121,43 @@ proc enemyTargets() =
     order.add(ids[bestIndex])
   return order
 
+proc nearestEnemyDist(x, y) =
+  var best = 999999
+  for planet in planets():
+    if planet.owner != 0 and planet.owner != myId():
+      let d = dist(planet.x, planet.y, x, y)
+      if d < best:
+        best = d
+  return best
+
+proc reinforce() =
+  # Funnel ships from safe rear planets to the most endangered own
+  # planet, danger being proximity to enemy planets.
+  var dangerId = -1
+  var dangerDist = 999999
+  for planet in planets():
+    if planet.owner == myId():
+      let d = nearestEnemyDist(planet.x, planet.y)
+      if d < dangerDist:
+        dangerDist = d
+        dangerId = planet.id
+  if dangerId == -1:
+    return
+  # One ferry at a time, wait for the last one to land.
+  if inbound(dangerId, myId()) > 0:
+    return
+  var sources = []
+  for planet in planets():
+    if planet.owner == myId() and planet.id != dangerId:
+      if len(sources) < 3 and planet.ships >= 10:
+        # Only clearly safe planets send, twice as far from the
+        # enemy as the endangered one.
+        if nearestEnemyDist(planet.x, planet.y) > dangerDist * 2:
+          sources.add(planet.id)
+  if len(sources) > 0:
+    select(sources)
+    sendTo(dangerId)
+
 proc alivePlayers() =
   var seen = []
   for planet in planets():
@@ -178,3 +215,6 @@ proc tick() =
       if allowed:
         if tryAttack(enemy):
           return
+
+  # No strike this cycle: shore up the front line instead.
+  reinforce()

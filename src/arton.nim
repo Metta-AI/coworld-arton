@@ -406,12 +406,20 @@ proc runHeadless(shotPath: string) =
     for ship in sim.ships:
       if ship.ownerId == player.id:
         inc shipCount
-    var note = ""
+    var
+      note = ""
+      actions = 0
     for agent in aiAgents:
-      if agent.playerId == player.id and agent.failed:
-        note = "  CRASHED: " & agent.error
+      if agent.playerId == player.id:
+        actions = agent.actions
+        if agent.failed:
+          note = "  CRASHED: " & agent.error
     echo "player ", player.id, ": ", planetCount, " planets, ",
-      shipCount, " ships", note
+      shipCount, " ships, ", actions, " actions", note
+  var totalActions = 0
+  for agent in aiAgents:
+    totalActions += agent.actions
+  echo "total actions: ", totalActions
   echo "elapsed ", formatFloat(elapsed, ffDecimal, 2), "s, ",
     int(float(sim.tickCount) / max(elapsed, 0.001)), " ticks/s"
   if shotPath != "":

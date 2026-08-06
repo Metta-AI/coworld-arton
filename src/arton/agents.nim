@@ -24,6 +24,9 @@ type
     ## the rest of the match, with the error kept for display.
     playerId*: int32
     selected*: seq[int32]
+    ## Count of action calls the script made: select, selectAll,
+    ## sendTo and setOffense.
+    actions*: int
     failed*: bool
     error*: string
     vm: NimmyVM
@@ -131,6 +134,7 @@ proc register(agent: Agent) =
     arrayValue(arr)
 
   agent.vm.addProc("select") do (args: seq[Value]) -> Value:
+    inc agent.actions
     agent.selected = @[]
     for planetId in agent.live[].planetIds(args):
       if agent.live[].planets[planetId].ownerId == agent.playerId and
@@ -139,6 +143,7 @@ proc register(agent: Agent) =
     nilValue()
 
   agent.vm.addProc("selectAll") do (args: seq[Value]) -> Value:
+    inc agent.actions
     agent.selected = @[]
     for planet in agent.live[].planets:
       if planet.ownerId == agent.playerId:
@@ -146,6 +151,7 @@ proc register(agent: Agent) =
     nilValue()
 
   agent.vm.addProc("sendTo") do (args: seq[Value]) -> Value:
+    inc agent.actions
     let targets = agent.live[].planetIds(args)
     if targets.len == 1:
       for sourceId in agent.selected:
@@ -153,6 +159,7 @@ proc register(agent: Agent) =
     nilValue()
 
   agent.vm.addProc("setOffense") do (args: seq[Value]) -> Value:
+    inc agent.actions
     if args.len == 1:
       let factor = intArg(args[0])
       if factor >= 10 and factor <= 100:
