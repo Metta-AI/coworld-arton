@@ -32,6 +32,10 @@ const
   ShipSpawnGapPixels* = 19'i32
   RingIntervalTicks* = 20'i32
   PushIterations* = 2'i32
+  ## Cap on how far one push pass may move a ship. Pushes accumulate
+  ## against a snapshot and apply capped, so crowded lanes cannot
+  ## relay a ship across the map in one tick.
+  PushMaxSubpixels* = 512'i32
   ## Ship collision broadphase grid. Cells are bigger than the ship
   ## interaction diameter so only neighbor cells need checking.
   CollisionCellPixels* = 32'i32
@@ -394,9 +398,10 @@ proc steerShips(sim: var Sim) =
     ship.x += cos256(ship.heading) * ShipSpeedSubpixels div TrigScale
     ship.y += sin256(ship.heading) * ShipSpeedSubpixels div TrigScale
 
-proc pushPair(sim: var Sim, i, j: int32) =
-  ## Resolves one potential same player ship overlap, verlet style.
-  ## Ships of different players pass through each other.
+proc pushPair(sim: Sim, i, j: int32,
+    pushX, pushY: var seq[int32]) =
+  ## Accumulates the separation push for one overlapping same player
+  ## pair. Ships of different players pass through each other.
   if sim.ships[i].ownerId != sim.ships[j].ownerId:
     return
   let
@@ -409,30 +414,30 @@ proc pushPair(sim: var Sim, i, j: int32) =
   if distSq >= minDist * minDist:
     return
   var
-    pushX = 0'i32
-    pushY = 0'i32
+    stepX = 0'i32
+    stepY = 0'i32
   let dist = isqrt(distSq)
   if dist == 0:
-    pushX = minDist div 2
+    stepX = minDist div 2
   else:
     let overlap = minDist - dist
-    pushX = dx * (overlap div 2) div dist
-    pushY = dy * (overlap div 2) div dist
+    stepX = dx * (overlap div 2) div dist
+    stepY = dy * (overlap div 2) div dist
   # Priority queuing: the ship that has been flying longer holds its
   # course and the younger ship takes the whole push. Equal ages,
   # like ships from the same ring, split the push evenly. This keeps
   # crowds flowing instead of forming deadlocked shells.
   if sim.ships[i].age > sim.ships[j].age:
-    sim.ships[j].x += pushX * 2
-    sim.ships[j].y += pushY * 2
+    pushX[j] += stepX * 2
+    pushY[j] += stepY * 2
   elif sim.ships[j].age > sim.ships[i].age:
-    sim.ships[i].x -= pushX * 2
-    sim.ships[i].y -= pushY * 2
+    pushX[i] -= stepX * 2
+    pushY[i] -= stepY * 2
   else:
-    sim.ships[i].x -= pushX
-    sim.ships[i].y -= pushY
-    sim.ships[j].x += pushX
-    sim.ships[j].y += pushY
+    pushX[i] -= stepX
+    pushY[i] -= stepY
+    pushX[j] += stepX
+    pushY[j] += stepY
 
 proc shipCell(ship: Ship): int32 =
   ## Grid cell index for a ship, clamped to the grid edges.
@@ -453,10 +458,14 @@ proc pushShips(sim: var Sim) =
   ## Pushes overlapping same player ships apart using a uniform grid
   ## broadphase: counting sort into cells, then only within cell and
   ## forward neighbor pairs. Deterministic order, no N squared scan.
+  ## Pushes accumulate against a position snapshot and apply capped
+  ## at the end, so a crowded lane cannot relay a ship far away.
   let shipCount = int32(sim.ships.len)
   if shipCount < 2:
     return
   var
+    pushX = newSeq[int32](shipCount)
+    pushY = newSeq[int32](shipCount)
     cellStart = newSeq[int32](CollisionCellCount + 1)
     order = newSeq[int32](shipCount)
   for i in 0 ..< shipCount:
@@ -483,7 +492,7 @@ proc pushShips(sim: var Sim) =
         continue
       for a in cellStart[cell] ..< cellStart[cell + 1]:
         for b in a + 1 ..< cellStart[cell + 1]:
-          sim.pushPair(order[a], order[b])
+          sim.pushPair(order[a], order[b], pushX, pushY)
       for neighbor in Neighbors:
         let
           otherX = cellX + neighbor[0]
@@ -494,7 +503,19 @@ proc pushShips(sim: var Sim) =
         let other = otherY * CollisionGridSide + otherX
         for a in cellStart[cell] ..< cellStart[cell + 1]:
           for b in cellStart[other] ..< cellStart[other + 1]:
-            sim.pushPair(order[a], order[b])
+            sim.pushPair(order[a], order[b], pushX, pushY)
+
+  # Apply the accumulated pushes, capped per pass.
+  for i in 0 ..< shipCount:
+    var
+      applyX = clamp(pushX[i], -16384'i32, 16384'i32)
+      applyY = clamp(pushY[i], -16384'i32, 16384'i32)
+    let mag = isqrt(applyX * applyX + applyY * applyY)
+    if mag > PushMaxSubpixels:
+      applyX = applyX * PushMaxSubpixels div mag
+      applyY = applyY * PushMaxSubpixels div mag
+    sim.ships[i].x += applyX
+    sim.ships[i].y += applyY
 
 proc avoidPlanets(sim: var Sim) =
   ## Keeps ships outside planets they are not landing on, so swarms
