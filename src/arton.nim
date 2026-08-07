@@ -312,7 +312,7 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     ctx.restore()
 
   ctx.fillStyle = HudColor
-  ctx.fontSize = 14
+  ctx.fontSize = 18
   for planet in sim.planets:
     let
       label = $planet.ships
@@ -321,7 +321,7 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     # read on any orb or ink.
     let at = vec2(
       float32(planet.x) - metrics.width / 2,
-      float32(planet.y) + 5)
+      float32(planet.y) + 6)
     ctx.strokeStyle = rgba(0, 0, 0, 255)
     ctx.lineWidth = 3
     ctx.strokeText(label, at)
@@ -357,10 +357,13 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       else:
         HudColor
     let metrics = ctx.measureText(banner)
-    ctx.fillText(banner, vec2(
+    let bannerAt = vec2(
       float32(WorldWidth) / 2 - metrics.width / 2,
-      float32(WorldHeight) / 2 - 24
-    ))
+      float32(WorldHeight) / 2 - 24)
+    ctx.strokeStyle = rgba(255, 255, 255, 255)
+    ctx.lineWidth = 5
+    ctx.strokeText(banner, bannerAt)
+    ctx.fillText(banner, bannerAt)
 
 proc takeScreenshot(frame: Image) =
   ## Saves the current frame as a png without any OS tools.
