@@ -257,12 +257,10 @@ var
   frameCount = 0
   shotPath = ""
   shotFrames = 300
-  autoDemo = false
 
 for param in commandLineParams():
   if param.startsWith("--shot="):
     shotPath = param.split("=")[1]
-    autoDemo = true
   elif param.startsWith("--frames="):
     shotFrames = parseInt(param.split("=")[1])
 
@@ -322,15 +320,6 @@ window.onFrame = proc() =
   # Holding the mouse keeps pouring paint.
   if window.buttonDown[MouseLeft]:
     queueSplat(window.mousePos.vec2, 1.5)
-
-  # Scripted splats for the self test.
-  if autoDemo and frameCount mod 45 == 1 and frameCount < 250:
-    hue = (hue + 0.61803'f32) mod 1.0'f32
-    let spot = vec2(
-      200.0'f32 + float32(frameCount mod 7) * 100.0'f32,
-      300.0'f32 + float32(frameCount mod 3) * 180.0'f32
-    )
-    queueSplat(spot, 6.0)
 
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
