@@ -161,6 +161,23 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
         state.y = state.y + push.y
   fragColor = state
 
+proc shipVert(
+  gl_Position: var Vec4, vUv: var Vec2, vColor: var Vec3,
+  vertexPos: Vec2, vertexUv: Vec2, vertexColor: Vec3
+) =
+  ## Window pixel coords to ndc, y flipped.
+  let ndc = vertexPos / resolution * 2.0'f32 - vec2(1.0, 1.0)
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0)
+  vUv = vertexUv
+  vColor = vertexColor
+
+proc shipFrag(
+  fragColor: var Vec4, vUv: Vec2, vColor: Vec3
+) =
+  ## The sprite alpha shapes a premultiplied fill of the owner color.
+  let a = texture(paperTex, vUv).w
+  fragColor = vec4(vColor.x * a, vColor.y * a, vColor.z * a, a)
+
 proc compositeFrag(fragColor: var Vec4, uv: Vec2) =
   ## Draws the resolved msaa planet layer over the canvas.
   fragColor = texture(statePrev, uv)
@@ -276,6 +293,7 @@ type
     msaaFbo, msaaColor, msaaDepth: GLuint
     resolveFbo, resolveTex: GLuint
     msaaSize: IVec2
+    shipProgram, shipTex, shipVao, shipVbo: GLuint
     queue*: seq[Splat]
 
 proc compileShader(kind: GLenum, source: string): GLuint =
@@ -537,6 +555,25 @@ proc initArt*(): ArtState =
     glClearColor(0, 0, 0, 0)
     glClear(GL_COLOR_BUFFER_BIT)
 
+  result.shipProgram = makeProgram(
+    toShader(shipVert, glsl3Desktop, shaderVertex),
+    toShader(shipFrag, glsl3Desktop, shaderFragment))
+  result.shipTex = loadTexture("data/ship.png", red = false)
+  glGenVertexArrays(1, addr result.shipVao)
+  glBindVertexArray(result.shipVao)
+  glGenBuffers(1, addr result.shipVbo)
+  glBindBuffer(GL_ARRAY_BUFFER, result.shipVbo)
+  let shipStride = GLsizei(28)
+  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8),
+      ("vertexColor", 3, 16)]:
+    let loc = glGetAttribLocation(
+      result.shipProgram, spec[0].cstring)
+    if loc >= 0:
+      glEnableVertexAttribArray(GLuint(loc))
+      glVertexAttribPointer(
+        GLuint(loc), GLint(spec[1]), cGL_FLOAT, GL_FALSE, shipStride,
+        cast[pointer](spec[2]))
+
   result.paper = loadTexture("data/bg.png", red = false)
   var paths: seq[string]
   for path in walkFiles("data/splats/*.png"):
@@ -626,6 +663,63 @@ proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
     glGetUniformLocation(program, "mvp"), 1, GL_FALSE,
     cast[ptr float32](addr p))
   glDrawArrays(GL_TRIANGLES, 0, mesh.vertCount)
+
+proc drawShips*(
+  art: var ArtState, viewport: IVec2,
+  view: tuple[scale: float32, offset: Vec2], sim: Sim,
+  colors: seq[Vec3], size: float32
+) =
+  ## Every ship as one rotated textured quad in a single gl draw.
+  if sim.ships.len == 0:
+    return
+  var verts = newSeqOfCap[float32](sim.ships.len * 6 * 7)
+  let half = size / 2 * view.scale
+  for ship in sim.ships:
+    let
+      x = view.offset.x +
+        float32(ship.x) / float32(SubpixelScale) * view.scale
+      y = view.offset.y +
+        float32(ship.y) / float32(SubpixelScale) * view.scale
+      # The sprite nose points up, headings point plus x, so the
+      # quad rotates an extra quarter turn like the cpu path did.
+      angle = float32(ship.heading) * 2.0'f32 * PI / 256.0'f32 +
+        float32(PI) / 2
+      ca = cos(angle)
+      sa = sin(angle)
+      color =
+        if ship.ownerId >= 1 and ship.ownerId <= int32(colors.len):
+          colors[ship.ownerId - 1]
+        else:
+          vec3(0.3, 0.3, 0.3)
+    template corner(ox, oy, u, v: float32) =
+      verts.add([
+        float32(x + ox * ca - oy * sa),
+        float32(y + ox * sa + oy * ca),
+        float32(u), float32(v), color.x, color.y, color.z])
+    corner(-half, -half, 0, 0)
+    corner(half, -half, 1, 0)
+    corner(half, half, 1, 1)
+    corner(-half, -half, 0, 0)
+    corner(half, half, 1, 1)
+    corner(-half, half, 0, 1)
+  glBindFramebuffer(GL_FRAMEBUFFER, 0)
+  glViewport(0, 0, viewport.x, viewport.y)
+  glBindVertexArray(art.shipVao)
+  glBindBuffer(GL_ARRAY_BUFFER, art.shipVbo)
+  glBufferData(
+    GL_ARRAY_BUFFER, verts.len * 4, addr verts[0], GL_STREAM_DRAW)
+  glDisable(GL_DEPTH_TEST)
+  glEnable(GL_BLEND)
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+  glUseProgram(art.shipProgram)
+  glActiveTexture(GL_TEXTURE0)
+  glBindTexture(GL_TEXTURE_2D, art.shipTex)
+  glUniform1i(uniformLoc(art.shipProgram, "paperTex"), 0)
+  glUniform2f(
+    uniformLoc(art.shipProgram, "resolution"),
+    float32(viewport.x), float32(viewport.y))
+  glDrawArrays(GL_TRIANGLES, 0, GLsizei(verts.len div 7))
+  glDisable(GL_BLEND)
 
 proc ensureMsaa(art: var ArtState, size: IVec2) =
   ## Allocates or resizes the multisampled planet layer and its

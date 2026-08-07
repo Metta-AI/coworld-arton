@@ -252,7 +252,8 @@ proc demoOrders(sim: var Sim, playerId: int32) =
 
 proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     showBox: bool, dragTarget: int32, dragSources: seq[int32],
-    pixelScale: float32 = 1.0, artOverlay = false): Image {.measure.} =
+    pixelScale: float32 = 1.0, artOverlay = false,
+    drawShips = true): Image {.measure.} =
   ## Draws the whole sim in world coordinates, scaled up to the real
   ## output pixel size so nothing gets blurry. Dev graphics only:
   ## flat circles, triangle ships and plain text on white.
@@ -322,16 +323,19 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
         float32(target.radius) + 5
       ))
 
-  for ship in sim.ships:
-    let
-      x = float32(ship.x) / float32(SubpixelScale)
-      y = float32(ship.y) / float32(SubpixelScale)
-      angle = float32(ship.heading) * 2.0'f * PI / 256.0'f
-    ctx.save()
-    ctx.translate(vec2(x, y))
-    ctx.rotate(angle + float32(PI) / 2)
-    ctx.drawImage(shipSprite(ship.ownerId), -10, -10, 20, 20)
-    ctx.restore()
+  # The live window draws ships on the gpu through boxy instead,
+  # this cpu path only runs for screenshots and headless shots.
+  if drawShips:
+    for ship in sim.ships:
+      let
+        x = float32(ship.x) / float32(SubpixelScale)
+        y = float32(ship.y) / float32(SubpixelScale)
+        angle = float32(ship.heading) * 2.0'f * PI / 256.0'f
+      ctx.save()
+      ctx.translate(vec2(x, y))
+      ctx.rotate(angle + float32(PI) / 2)
+      ctx.drawImage(shipSprite(ship.ownerId), -10, -10, 20, 20)
+      ctx.restore()
 
   ctx.fillStyle = HudColor
   ctx.fontSize = 18
@@ -730,7 +734,13 @@ let appStart = epochTime()
 var
   lastTime = epochTime()
   accumulator = 0.0
-  inkAccumulator = 0.0
+
+when defined(fpsDebug):
+  var
+    fpsFrames = 0
+    fpsStart = epochTime()
+    fpsRenderSecs = 0.0
+    fpsArtSecs = 0.0
 
 proc stepSim() =
   ## Advances the sim on a fixed timestep from real elapsed time,
@@ -936,14 +946,21 @@ proc drawWindow() {.measure.} =
     var hues: seq[float32]
     for player in sim.players:
       hues.add(playerHue(player.id) / 360.0)
-    # The ink flows at game speed: two sim passes per frame at 1x,
-    # scaled by the multiplier, fractional passes carrying over.
-    inkAccumulator += 2.0 * speedMultiplier
-    var inkSteps = int(inkAccumulator)
-    inkAccumulator -= float64(inkSteps)
-    inkSteps = min(inkSteps, 32)
+    when defined(fpsDebug):
+      let artT0 = epochTime()
     artState.frame(
-      windowSize, view, sim, hues, epochTime() - appStart, inkSteps)
+      windowSize, view, sim, hues, epochTime() - appStart)
+    var shipColors: seq[Vec3]
+    for player in sim.players:
+      let c = strokeColor(player.id)
+      shipColors.add(vec3(
+        float32(c.r) / 255, float32(c.g) / 255, float32(c.b) / 255))
+    artState.drawShips(windowSize, view, sim, shipColors, 20.0)
+    when defined(fpsDebug):
+      glFinish()
+      fpsArtSecs += epochTime() - artT0
+  when defined(fpsDebug):
+    let renderT0 = epochTime()
   let frame = sim.renderFrame(
     selected,
     boxRectNow(pos),
@@ -951,8 +968,11 @@ proc drawWindow() {.measure.} =
     dragTarget,
     dragSources,
     view.scale,
-    artOverlay = artMode
+    artOverlay = artMode,
+    drawShips = not artMode
   )
+  when defined(fpsDebug):
+    fpsRenderSecs += epochTime() - renderT0
   # The art passes bind their own vaos and disable blending, boxy
   # assumes both stayed as it left them.
   glBindVertexArray(GLuint(boxyVao))
@@ -985,6 +1005,21 @@ startProfileTrace()
 window.onFrame = proc() =
   stepSim()
   drawWindow()
+  when defined(fpsDebug):
+    inc fpsFrames
+    if fpsFrames == 120:
+      let secs = epochTime() - fpsStart
+      echo "frame ms avg: ",
+        formatFloat(secs / 120.0 * 1000.0, ffDecimal, 2),
+        "  render ms: ",
+        formatFloat(fpsRenderSecs / 120.0 * 1000.0, ffDecimal, 2),
+        "  art ms: ",
+        formatFloat(fpsArtSecs / 120.0 * 1000.0, ffDecimal, 2),
+        "  ships: ", sim.ships.len, "  tick: ", sim.tickCount
+      fpsFrames = 0
+      fpsStart = epochTime()
+      fpsRenderSecs = 0.0
+      fpsArtSecs = 0.0
   if profileShouldDump(int(sim.tickCount)):
     finishProfileTrace()
 
