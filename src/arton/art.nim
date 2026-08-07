@@ -4,8 +4,8 @@
 ## text stay on the cpu overlay drawn above all of this.
 
 import
-  std/[algorithm, os, random],
-  opengl, pixie, shady, vmath,
+  std/[algorithm, hashes, os, random, tables],
+  noisy, opengl, pixie, shady, vmath,
   sims
 
 const
@@ -81,7 +81,19 @@ proc artSimFrag(fragColor: var Vec4, uv: Vec2) =
       accVel = accVel + wv * sample.xy
       wsum = wsum + w
       velWsum = velWsum + wv
+  # Hue diffuses weighted by ink mass, otherwise empty pixels with
+  # hue zero bleed red into every fight and colors look wrong.
+  var hueMass = 0.0'f32
+  var massSum = 0.0'f32
+  for i in 0 ..< 3:
+    for j in 0 ..< 3:
+      let o = vec2(float32(i) - 1.0'f32, float32(j) - 1.0'f32)
+      let sample = texture(statePrev, src + o / resolution)
+      let w = inkG(o * 0.8'f32)
+      hueMass = hueMass + w * sample.z * sample.w
+      massSum = massSum + w * sample.z
   var state = acc / wsum
+  state.w = hueMass / max(massSum, 0.0001'f32)
   state.x = accVel.x / velWsum * 0.985'f32
   state.y = accVel.y / velWsum * 0.985'f32
   let speed = length(vec2(state.x, state.y))
@@ -139,37 +151,58 @@ proc artDrawFrag(fragColor: var Vec4, uv: Vec2) =
   col = col * (paper.xyz * 0.25'f32 + vec3(0.75, 0.75, 0.75))
   fragColor = vec4(col.x, col.y, col.z, 1.0)
 
-## The 3d planet orbs.
-
-proc planetVert(
-  gl_Position: var Vec4,
-  fragNormal: var Vec3,
-  fragMixK: var float32,
-  vertexPos: Vec3,
-  vertexNormal: Vec3,
-  vertexMix: float32
-) =
-  fragNormal = vertexNormal
-  fragMixK = vertexMix
-  gl_Position = mvp * vec4(vertexPos.x, vertexPos.y, vertexPos.z, 1.0)
+## The 3d planet orbs, ported from experiments/sphere.nim: a solid
+## jittered inner sphere, a shard shell rotating at its own rate and
+## a viewer facing gradient ring. Face colors mix the owner color.
 
 proc norm3(v: Vec3): Vec3 =
-  ## Manual normalize, the Vec3 normalize overload upsets shady.
-  result = v / max(length(v), 0.000001'f32)
+  result = v / sqrt(dot(v, v))
+
+proc planetVert(
+  gl_Position: var Vec4, vNormal: var Vec3, vMixK: var float32,
+  vVariant: var float32, vertexPos: Vec3, vertexNormal: Vec3,
+  vertexMix: float32, vertexVariant: float32
+) =
+  let world = modelRot * vec4(
+    vertexPos.x, vertexPos.y, vertexPos.z, 1.0)
+  gl_Position = mvp * world
+  let n = modelRot * vec4(
+    vertexNormal.x, vertexNormal.y, vertexNormal.z, 0.0)
+  vNormal = vec3(n.x, n.y, n.z)
+  vMixK = vertexMix
+  vVariant = vertexVariant
 
 proc planetFrag(
-  fragColor: var Vec4,
-  fragNormal: Vec3,
-  fragMixK: float32
+  fragColor: var Vec4, vNormal: Vec3, vMixK: float32,
+  vVariant: float32
 ) =
-  let n = norm3((modelRot * vec4(
-    fragNormal.x, fragNormal.y, fragNormal.z, 0.0)).xyz)
-  let light = vec3(0.3714, -0.5571, 0.7428)
-  let lit = 0.55'f32 + 0.45'f32 * max(dot(n, light), 0.0'f32)
-  let base = ownerColor * fragMixK
-  fragColor = vec4(base.x * lit, base.y * lit, base.z * lit, 1.0)
+  let n = norm3(vNormal)
+  let l = norm3(vec3(0.15, 1.0, 0.45))
+  let d = abs(dot(n, l))
+  let h = norm3(l + vec3(0.0, 0.0, 1.0))
+  let sp = pow(abs(dot(n, h)), 24.0'f32) * 0.35'f32
+  var shade = 0.3'f32 + 0.75'f32 * d
+  var base = vec3(vVariant, vVariant, vVariant)
+  if vVariant > 1.5'f32:
+    # Ring: unshaded gray to owner gradient.
+    shade = 1.0'f32
+    let t = vMixK
+    base = vec3(0.88, 0.87, 0.89) * (1.0'f32 - t) +
+      ownerColor * (t * 0.85'f32)
+  elif vMixK > 0.5'f32:
+    base = ownerColor * vVariant
+  fragColor = vec4(
+    base.x * shade + sp, base.y * shade + sp, base.z * shade + sp,
+    1.0)
 
 type
+  PlanetMesh = object
+    vao, vbo: GLuint
+    vertCount: GLsizei
+
+  PlanetSet = object
+    inner, outer, ring: PlanetMesh
+
   Splat* = object
     x*, y*: float32
     hue*: float32
@@ -181,8 +214,7 @@ type
     fbo: GLuint
     current: int
     vao, vbo: GLuint
-    planetVao, planetVbo: GLuint
-    planetVertCount: int32
+    orbCache: Table[int32, PlanetSet]
     paper: GLuint
     brushes: seq[GLuint]
     queue*: seq[Splat]
@@ -253,65 +285,117 @@ proc loadTexture(path: string, red: bool): GLuint =
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_REPEAT))
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_REPEAT))
 
-proc buildPlanetMesh(art: var ArtState, program: GLuint) =
-  ## A low poly icosphere with flat faces. Each vertex carries the
-  ## face normal and a mix factor: some faces are nearly black, some
-  ## are the owner color, so the orb reads as marbled ink.
-  let t = (1.0 + sqrt(5.0)) / 2.0
-  var base = @[
+proc jitterV(p: Vec3, seed: int64, amount: float32): Vec3 =
+  var h: Hash = 0
+  h = h !& hash(cast[int32](p.x)) !& hash(cast[int32](p.y)) !&
+    hash(cast[int32](p.z)) !& hash(seed)
+  var r = initRand(int64(h) xor seed)
+  let offset = vec3(
+    r.rand(2.0'f32) - 1.0'f32, r.rand(2.0'f32) - 1.0'f32,
+    r.rand(2.0'f32) - 1.0'f32)
+  p + offset * amount
+
+proc icosphere(subdivisions: int): seq[array[3, Vec3]] =
+  let t = (1.0'f32 + sqrt(5.0'f32)) / 2.0'f32
+  var v = @[
     vec3(-1, t, 0), vec3(1, t, 0), vec3(-1, -t, 0), vec3(1, -t, 0),
     vec3(0, -1, t), vec3(0, 1, t), vec3(0, -1, -t), vec3(0, 1, -t),
-    vec3(t, 0, -1), vec3(t, 0, 1), vec3(-t, 0, -1), vec3(-t, 0, 1)
-  ]
-  for v in base.mitems:
-    v = normalize(v)
-  let faces = @[
+    vec3(t, 0, -1), vec3(t, 0, 1), vec3(-t, 0, -1), vec3(-t, 0, 1)]
+  for p in v.mitems:
+    p = normalize(p)
+  let faces = [
     [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
     [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
     [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
-  ]
-  var data: seq[float32]
-  var rng = initRand(7)
+    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]]
   for face in faces:
-    # Subdivide each face once for a rounder orb.
-    let
-      a = base[face[0]]
-      b = base[face[1]]
-      c = base[face[2]]
-      ab = normalize((a + b) / 2)
-      bc = normalize((b + c) / 2)
-      ca = normalize((c + a) / 2)
-    for tri in [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]:
+    result.add([v[face[0]], v[face[1]], v[face[2]]])
+  for round in 0 ..< subdivisions:
+    var next: seq[array[3, Vec3]]
+    for tri in result:
       let
-        normal = normalize(cross(tri[1] - tri[0], tri[2] - tri[0]))
-        mixK = if rng.rand(1.0) < 0.45: rng.rand(0.7 .. 1.0) else:
-          rng.rand(0.05 .. 0.22)
-      for v in tri:
-        data.add([v.x, v.y, v.z, normal.x, normal.y, normal.z,
-          float32(mixK)])
-  art.planetVertCount = int32(data.len div 7)
-  glGenVertexArrays(1, addr art.planetVao)
-  glBindVertexArray(art.planetVao)
-  glGenBuffers(1, addr art.planetVbo)
-  glBindBuffer(GL_ARRAY_BUFFER, art.planetVbo)
+        ab = normalize((tri[0] + tri[1]) / 2.0'f32)
+        bc = normalize((tri[1] + tri[2]) / 2.0'f32)
+        ca = normalize((tri[2] + tri[0]) / 2.0'f32)
+      next.add([tri[0], ab, ca])
+      next.add([tri[1], bc, ab])
+      next.add([tri[2], ca, bc])
+      next.add([ab, bc, ca])
+    result = next
+
+proc buildOrb(
+  missing, teamRatio: float32, seed: int64, scale, jitterAmt: float32
+): seq[float32] =
+  ## Sphere.nim buildMesh with colors as mix plus variant scalars.
+  var faceRand = initRand(seed)
+  let islands = initSimplex(int(seed))
+  for tri in icosphere(2):
+    let colorPick = faceRand.rand(1.0'f32)
+    let teamV = [0.75'f32, 0.88, 0.56, 0.95][faceRand.rand(3)]
+    let blackV = [0.06'f32, 0.13, 0.02][faceRand.rand(2)]
+    let centroid = normalize(tri[0] + tri[1] + tri[2])
+    let field = islands.value(
+      centroid.x * 1.3'f32, centroid.y * 1.3'f32,
+      centroid.z * 1.3'f32) * 0.5'f32 + 0.5'f32
+    if field < missing:
+      continue
+    let
+      a = jitterV(tri[0], seed, jitterAmt) * scale
+      b = jitterV(tri[1], seed, jitterAmt) * scale
+      c = jitterV(tri[2], seed, jitterAmt) * scale
+      normal = normalize(cross(b - a, c - a))
+      team = colorPick < teamRatio
+    for p in [a, b, c]:
+      result.add([p.x, p.y, p.z, normal.x, normal.y, normal.z,
+        (if team: 1.0'f32 else: 0.0'f32),
+        (if team: teamV else: blackV)])
+
+proc buildRing(innerR, outerR: float32): seq[float32] =
+  ## Sphere.nim ring: flat annulus, gradient encoded in mixK with
+  ## variant 2 marking ring mode.
+  for i in 0 ..< 96:
+    let
+      a0 = float32(i) / 96.0'f32 * 2.0'f32 * PI
+      a1 = float32(i + 1) / 96.0'f32 * 2.0'f32 * PI
+      i0 = vec3(cos(a0) * innerR, sin(a0) * innerR, 0)
+      i1 = vec3(cos(a1) * innerR, sin(a1) * innerR, 0)
+      o0 = vec3(cos(a0) * outerR, sin(a0) * outerR, 0)
+      o1 = vec3(cos(a1) * outerR, sin(a1) * outerR, 0)
+      t0 = (cos(a0) + 1.0'f32) / 2.0'f32
+      t1 = (cos(a1) + 1.0'f32) / 2.0'f32
+    for (p, t) in [(i0, t0), (o0, t0), (o1, t1), (i0, t0), (o1, t1),
+        (i1, t1)]:
+      result.add([p.x, p.y, p.z, 0.0'f32, 0.0'f32, 1.0'f32, t, 2.0'f32])
+
+proc uploadPlanetMesh(art: var ArtState, data: seq[float32]): PlanetMesh =
+  glGenVertexArrays(1, addr result.vao)
+  glBindVertexArray(result.vao)
+  glGenBuffers(1, addr result.vbo)
+  glBindBuffer(GL_ARRAY_BUFFER, result.vbo)
   glBufferData(
-    GL_ARRAY_BUFFER, data.len * 4, addr data[0], GL_STATIC_DRAW)
-  # The linker assigns attribute locations, ask instead of assuming.
-  let
-    posLoc = GLuint(glGetAttribLocation(program, "vertexPos"))
-    normalLoc = glGetAttribLocation(program, "vertexNormal")
-    mixLoc = glGetAttribLocation(program, "vertexMix")
-  glEnableVertexAttribArray(posLoc)
-  glVertexAttribPointer(posLoc, 3, cGL_FLOAT, GL_FALSE, 28, nil)
-  if normalLoc >= 0:
-    glEnableVertexAttribArray(GLuint(normalLoc))
-    glVertexAttribPointer(
-      GLuint(normalLoc), 3, cGL_FLOAT, GL_FALSE, 28, cast[pointer](12))
-  if mixLoc >= 0:
-    glEnableVertexAttribArray(GLuint(mixLoc))
-    glVertexAttribPointer(
-      GLuint(mixLoc), 1, cGL_FLOAT, GL_FALSE, 28, cast[pointer](24))
+    GL_ARRAY_BUFFER, data.len * 4, unsafeAddr data[0], GL_STATIC_DRAW)
+  let stride = GLsizei(32)
+  for spec in [("vertexPos", 3, 0), ("vertexNormal", 3, 12),
+      ("vertexMix", 1, 24), ("vertexVariant", 1, 28)]:
+    let loc = glGetAttribLocation(art.planetProgram, spec[0].cstring)
+    if loc >= 0:
+      glEnableVertexAttribArray(GLuint(loc))
+      glVertexAttribPointer(
+        GLuint(loc), GLint(spec[1]), cGL_FLOAT, GL_FALSE, stride,
+        cast[pointer](spec[2]))
+  result.vertCount = GLsizei(data.len div 8)
+
+proc planetMeshes(art: var ArtState, id: int32): PlanetSet =
+  ## Cached per planet meshes, sphere.nim settings, seeded by id.
+  if id in art.orbCache:
+    return art.orbCache[id]
+  let seed = int64(id) * 977 + 12345
+  result.inner = art.uploadPlanetMesh(
+    buildOrb(0.0, 0.44, seed, 1.0, 0.13))
+  result.outer = art.uploadPlanetMesh(
+    buildOrb(0.6, 0.44, seed + 7, 1.21, 0.234))
+  result.ring = art.uploadPlanetMesh(buildRing(1.42, 1.46))
+  art.orbCache[id] = result
 
 proc initArt*(): ArtState =
   ## Builds every gl resource for the art mode. Needs a live context.
@@ -356,7 +440,6 @@ proc initArt*(): ArtState =
   for path in paths:
     result.brushes.add(loadTexture(path, red = true))
   doAssert result.brushes.len > 0, "no splat brushes found"
-  result.buildPlanetMesh(result.planetProgram)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -394,6 +477,19 @@ proc queueSplat*(art: var ArtState, x, y, hue, size: float32) =
   ## World position splat, queued for the next frame's inject passes.
   art.queue.add(Splat(
     x: x, y: float32(WorldHeight) - y, hue: hue, size: size))
+
+proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
+  ## One planet mesh with its own model matrix.
+  var m = model
+  var p = proj
+  glBindVertexArray(mesh.vao)
+  glUniformMatrix4fv(
+    glGetUniformLocation(program, "modelRot"), 1, GL_FALSE,
+    cast[ptr float32](addr m))
+  glUniformMatrix4fv(
+    glGetUniformLocation(program, "mvp"), 1, GL_FALSE,
+    cast[ptr float32](addr p))
+  glDrawArrays(GL_TRIANGLES, 0, mesh.vertCount)
 
 proc frame*(
   art: var ArtState, viewport: IVec2, view: tuple[scale: float32, offset: Vec2],
@@ -445,27 +541,22 @@ proc frame*(
     art.drawProgram, 0, art.stateTex[art.current], art.paper,
     noSplat, 0.0, 0.0, viewport)
 
-  # The 3d planet orbs, each with its own size, spin axis and rate.
+  # The 3d planet orbs: inner sphere, shard shell and ring per
+  # planet, each with its own size and rates from the planet id.
   glEnable(GL_DEPTH_TEST)
   glClear(GL_DEPTH_BUFFER_BIT)
-  glBindVertexArray(art.planetVao)
   glUseProgram(art.planetProgram)
   let proj = ortho(
     0.0'f32, float32(WorldWidth), float32(WorldHeight), 0.0'f32,
-    -100.0'f32, 100.0'f32)
+    -200.0'f32, 200.0'f32)
   for planet in sim.planets:
     let
+      meshes = art.planetMeshes(planet.id)
       seed = float32(planet.id)
-      axis = normalize(vec3(
-        sin(seed * 12.9898'f32), cos(seed * 78.233'f32), 0.6'f32))
-      rate = 0.2'f32 + 0.5'f32 * abs(sin(seed * 3.7'f32))
-      angle = float32(time) * rate + seed
-      model = translate(vec3(
+      rateK = 0.6'f32 + 0.8'f32 * abs(sin(seed * 3.7'f32))
+      base = translate(vec3(
           float32(planet.x), float32(planet.y), 0.0'f32)) *
-        rotate(angle, axis) *
         scale(vec3(float32(planet.radius)))
-      rot = rotate(angle, axis)
-      mvp = proj * model
       hue =
         if planet.ownerId == NeutralOwner or
           planet.ownerId > int32(hues.len):
@@ -474,17 +565,20 @@ proc frame*(
           hues[planet.ownerId - 1]
       color =
         if hue < 0:
-          vec3(0.75, 0.73, 0.70)
+          vec3(0.62, 0.60, 0.58)
         else:
-          hsvToRgb(vec3(hue, 0.85'f32, 0.85'f32))
-    glUniformMatrix4fv(
-      uniformLoc(art.planetProgram, "mvp"), 1, GL_FALSE,
-      cast[ptr float32](unsafeAddr mvp))
-    glUniformMatrix4fv(
-      uniformLoc(art.planetProgram, "modelRot"), 1, GL_FALSE,
-      cast[ptr float32](unsafeAddr rot))
+          hsvToRgb(vec3(hue, 0.8'f32, 0.85'f32))
     glUniform3f(
       uniformLoc(art.planetProgram, "ownerColor"),
       color.x, color.y, color.z)
-    glDrawArrays(GL_TRIANGLES, 0, art.planetVertCount)
+
+    let tf = float32(time)
+    drawOne(art.planetProgram, meshes.inner,
+      base * rotateY(0.35'f32 * rateK * tf + seed) *
+      rotateX(0.35'f32), proj)
+    drawOne(art.planetProgram, meshes.outer,
+      base * rotateY(-0.64'f32 * rateK * tf + seed) *
+      rotateZ(0.22'f32), proj)
+    drawOne(art.planetProgram, meshes.ring,
+      base * rotateZ(2.0'f32 * rateK * tf + seed), proj)
   glDisable(GL_DEPTH_TEST)
