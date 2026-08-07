@@ -29,10 +29,10 @@ type
 var artParams* = ArtParams(
   velDamp: 0.985, speedCap: 3.0, fadeKeep: 0.9984, fadeSubK: 0.4,
   burstPush: 8.8, inkSat: 0.85, inkVal: 0.75, paperMix: 0.25,
-  planetSat: 1.0, planetVal: 1.0, washout: 0.0,
-  spinInner: 1.0, spinOuter: 1.0,
+  planetSat: 1.0, planetVal: 1.0, washout: 0.45,
+  spinInner: 0.61, spinOuter: 1.89,
   specular: 1.0, jitterInner: 0.035, jitterShell: 0.106,
-  shellScale: 1.22, shellMissing: 0.47, ringInner: 1.51,
+  shellScale: 1.22, shellMissing: 0.47, ringInner: 1.69,
   ringOuter: 1.51, showRing: false,
   trailEvery: 9, trailSize: 11, trailAmount: 2.53, trailDrag: 6.6,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
