@@ -415,34 +415,44 @@ window.onFrame = proc() =
   subWindow("Sphere Params", showParams, vec2(16, 16), vec2(348, 720)):
     text "subdiv label":
       characters "subdivisions"
-    scrubber "subdiv", paramSubdiv, 0.0'f32, 4.0'f32, ""
+    scrubber "subdiv", paramSubdiv, 0.0'f32, 4.0'f32,
+      $clamp(int(paramSubdiv + 0.5'f32), 0, 4)
     text "missing label":
       characters "shell missing"
-    scrubber "missing", paramMissing, 0.0'f32, 0.95'f32, ""
+    scrubber "missing", paramMissing, 0.0'f32, 0.95'f32,
+      formatFloat(paramMissing, ffDecimal, 2)
     text "purple label":
       characters "purple vs black"
-    scrubber "purple", paramPurple, 0.0'f32, 1.0'f32, ""
+    scrubber "purple", paramPurple, 0.0'f32, 1.0'f32,
+      formatFloat(paramPurple, ffDecimal, 2)
     text "inner label":
       characters "inner rotation"
-    scrubber "innerRot", paramInnerRot, -2.0'f32, 2.0'f32, ""
+    scrubber "innerRot", paramInnerRot, -2.0'f32, 2.0'f32,
+      formatFloat(paramInnerRot, ffDecimal, 2)
     text "outer label":
       characters "outer rotation"
-    scrubber "outerRot", paramOuterRot, -2.0'f32, 2.0'f32, ""
+    scrubber "outerRot", paramOuterRot, -2.0'f32, 2.0'f32,
+      formatFloat(paramOuterRot, ffDecimal, 2)
     text "shell dist label":
       characters "shell distance"
-    scrubber "shellDist", paramShellDist, 1.1'f32, 2.6'f32, ""
+    scrubber "shellDist", paramShellDist, 1.1'f32, 2.6'f32,
+      formatFloat(paramShellDist, ffDecimal, 2)
     text "ring dist label":
       characters "ring distance"
-    scrubber "ringDist", paramRingDist, 1.2'f32, 3.0'f32, ""
+    scrubber "ringDist", paramRingDist, 1.2'f32, 3.0'f32,
+      formatFloat(paramRingDist, ffDecimal, 2)
     text "ring width label":
       characters "ring width"
-    scrubber "ringWidth", paramRingWidth, 0.02'f32, 0.6'f32, ""
+    scrubber "ringWidth", paramRingWidth, 0.02'f32, 0.6'f32,
+      formatFloat(paramRingWidth, ffDecimal, 2)
     text "ring rot label":
       characters "ring rotation"
-    scrubber "ringRot", paramRingRot, -2.0'f32, 2.0'f32, ""
+    scrubber "ringRot", paramRingRot, -2.0'f32, 2.0'f32,
+      formatFloat(paramRingRot, ffDecimal, 2)
     text "jitter label":
       characters "vertex jitter"
-    scrubber "jitter", paramJitter, 0.0'f32, 0.4'f32, ""
+    scrubber "jitter", paramJitter, 0.0'f32, 0.4'f32,
+      formatFloat(paramJitter, ffDecimal, 2)
   sk.endUi()
 
   window.swapBuffers()
