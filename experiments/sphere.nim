@@ -282,15 +282,15 @@ var
   showParams = true
   # The sliders.
   paramSubdiv = 2.0'f32
-  paramMissing = 0.7'f32
-  paramPurple = 0.55'f32
+  paramMissing = 0.6'f32
+  paramPurple = 0.44'f32
   paramInnerRot = 0.35'f32
-  paramOuterRot = -0.65'f32
-  paramShellDist = 1.5'f32
-  paramRingDist = 1.78'f32
-  paramRingWidth = 0.16'f32
-  paramRingRot = 0.45'f32
-  paramJitter = 0.09'f32
+  paramOuterRot = -0.64'f32
+  paramShellDist = 1.21'f32
+  paramRingDist = 1.42'f32
+  paramRingWidth = 0.04'f32
+  paramRingRot = 2.0'f32
+  paramJitter = 0.13'f32
   lastSubdiv = -1
   lastMissing = -1.0'f32
   lastPurple = -1.0'f32
