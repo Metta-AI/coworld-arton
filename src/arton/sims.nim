@@ -139,6 +139,11 @@ type
     waves*: seq[Wave]
     outcome*: MatchOutcome
     winner*: int32
+    ## Render events from the last tick, in pixels. Cleared every
+    ## tick and deliberately not part of the state hash: they are
+    ## derived signals for effects like ink splats.
+    deaths*: seq[tuple[x, y, ownerId: int32]]
+    captures*: seq[tuple[x, y, ownerId: int32]]
 
 proc initRng*(seed: uint32): Rng =
   ## Creates a generator from a seed. Zero is remapped as xorshift32
@@ -642,8 +647,14 @@ proc landShips(sim: var Sim) {.measure.} =
     elif sim.planets[ship.targetPlanet].ships == 0:
       sim.planets[ship.targetPlanet].ownerId = ship.ownerId
       sim.planets[ship.targetPlanet].growthTicks = 0
+      sim.captures.add((planet.x, planet.y, ship.ownerId))
     else:
       dec sim.planets[ship.targetPlanet].ships
+      sim.deaths.add((
+        ship.x div SubpixelScale,
+        ship.y div SubpixelScale,
+        ship.ownerId
+      ))
   sim.ships = kept
 
 proc producePlanets(sim: var Sim) {.measure.} =
@@ -709,6 +720,8 @@ proc tick*(sim: var Sim) {.measure.} =
   ## Does nothing once the match is decided.
   if sim.outcome != MatchOngoing:
     return
+  sim.deaths.setLen(0)
+  sim.captures.setLen(0)
   inc sim.tickCount
   sim.spawnWaves()
   sim.steerShips()

@@ -5,7 +5,7 @@
 import
   std/[math, os, strformat, strutils, times],
   boxy, bumpy, opengl, pixie, windy,
-  arton/agents, arton/profiles, arton/sims
+  arton/agents, arton/art, arton/profiles, arton/sims
 
 const
   FontPath = "data/IBMPlexSans-Regular.ttf"
@@ -33,6 +33,9 @@ var
   demoEnabled = false
   shotIndex = 0
   hudSpeed = 1.0
+  artMode = true
+  artReady = false
+  artState: ArtState
 
 proc aiPaths(): seq[string] =
   ## Script paths from repeated --ai=path arguments. Every flag adds
@@ -220,7 +223,7 @@ proc demoOrders(sim: var Sim, playerId: int32) =
 
 proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     showBox: bool, dragTarget: int32, dragSources: seq[int32],
-    pixelScale: float32 = 1.0): Image {.measure.} =
+    pixelScale: float32 = 1.0, artOverlay = false): Image {.measure.} =
   ## Draws the whole sim in world coordinates, scaled up to the real
   ## output pixel size so nothing gets blurry. Dev graphics only:
   ## flat circles, triangle ships and plain text on white.
@@ -228,18 +231,24 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
     int(float32(WorldWidth) * pixelScale),
     int(float32(WorldHeight) * pixelScale)
   )
-  result.fill(rgba(255, 255, 255, 255))
+  if artOverlay:
+    result.fill(rgba(0, 0, 0, 0))
+  else:
+    result.fill(rgba(255, 255, 255, 255))
   let ctx = newContext(result)
   ctx.scale(vec2(pixelScale, pixelScale))
   ctx.font = FontPath
 
-  for planet in sim.planets:
-    let center = vec2(float32(planet.x), float32(planet.y))
-    ctx.fillStyle = fillColor(planet.ownerId)
-    ctx.fillCircle(circle(center, float32(planet.radius)))
-    ctx.strokeStyle = strokeColor(planet.ownerId)
-    ctx.lineWidth = 2
-    ctx.strokeCircle(circle(center, float32(planet.radius)))
+  if not artOverlay:
+    # In art mode the planet bodies are 3d orbs drawn by the art
+    # layer, the overlay only adds ui and text.
+    for planet in sim.planets:
+      let center = vec2(float32(planet.x), float32(planet.y))
+      ctx.fillStyle = fillColor(planet.ownerId)
+      ctx.fillCircle(circle(center, float32(planet.radius)))
+      ctx.strokeStyle = strokeColor(planet.ownerId)
+      ctx.lineWidth = 2
+      ctx.strokeCircle(circle(center, float32(planet.radius)))
 
   for planetId in selected:
     let planet = sim.planets[planetId]
@@ -497,6 +506,8 @@ let window = newWindow(
 makeContextCurrent(window)
 loadExtensions()
 let bxy = newBoxy()
+var boxyVao: GLint
+glGetIntegerv(GL_VERTEX_ARRAY_BINDING, addr boxyVao)
 
 proc viewTransform(windowSize: IVec2): tuple[scale: float32, offset: Vec2] =
   ## Uniform world to window scale and the letterbox offset that
@@ -588,6 +599,8 @@ window.onButtonPress = proc(button: Button) =
   of Key0: sim.setOffenseFactor(HumanPlayer, 100)
   of KeyD:
     demoEnabled = not demoEnabled
+  of KeyF10:
+    artMode = not artMode
   of KeyF2:
     let box = boxRectNow(mouseWorld())
     takeScreenshot(sim.renderFrame(selected, box, false, -1, @[]))
@@ -645,6 +658,17 @@ proc stepSim() =
         sim.demoOrders(player)
     stepAgents(sim)
     sim.tick()
+    if artReady:
+      # Every annihilation splats ink in the ship's color, every
+      # capture splats big in the conqueror's color.
+      for death in sim.deaths:
+        artState.queueSplat(
+          float32(death.x), float32(death.y),
+          playerHue(death.ownerId) / 360.0, 24.0)
+      for capture in sim.captures:
+        artState.queueSplat(
+          float32(capture.x), float32(capture.y),
+          playerHue(capture.ownerId) / 360.0, 120.0)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
@@ -676,16 +700,30 @@ proc drawWindow() {.measure.} =
       else:
         @[]
     view = viewTransform(windowSize)
-    frame = sim.renderFrame(
-      selected,
-      boxRectNow(pos),
-      showBox,
-      dragTarget,
-      dragSources,
-      view.scale
-    )
+  if artMode:
+    if not artReady:
+      artState = initArt()
+      artReady = true
+    var hues: seq[float32]
+    for player in sim.players:
+      hues.add(playerHue(player.id) / 360.0)
+    artState.frame(windowSize, view, sim, hues, epochTime())
+  let frame = sim.renderFrame(
+    selected,
+    boxRectNow(pos),
+    showBox,
+    dragTarget,
+    dragSources,
+    view.scale,
+    artOverlay = artMode
+  )
+  # The art passes bind their own vaos and disable blending, boxy
+  # assumes both stayed as it left them.
+  glBindVertexArray(GLuint(boxyVao))
+  glEnable(GL_BLEND)
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
   bxy.addImage("frame", frame, mipmaps = false)
-  bxy.beginFrame(windowSize)
+  bxy.beginFrame(windowSize, clearFrame = not artMode)
   bxy.drawImage("frame", rect(
     view.offset,
     vec2(float32(frame.width), float32(frame.height))
