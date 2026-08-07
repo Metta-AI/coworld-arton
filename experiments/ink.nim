@@ -38,6 +38,8 @@ var
   erasePos: Uniform[Vec2]
   eraseAmount: Uniform[float32]
   eraseRadius: Uniform[float32]
+  colorSat: Uniform[float32]
+  colorVal: Uniform[float32]
 
 ## Helper functions compiled into the shaders. Custom names so they
 ## never collide with GLSL builtins.
@@ -197,7 +199,7 @@ proc inkDrawFrag(fragColor: var Vec4, uv: Vec2) =
   let a = pow(sstep(0.0'f32, 1.0'f32, rho), 0.1'f32)
   let b = exp(-1.7'f32 * sstep(0.5'f32, 3.75'f32, rho))
 
-  let fcol = hsvToRgb(vec3(state.w, 0.85'f32, 0.75'f32))
+  let fcol = hsvToRgb(vec3(state.w, colorSat, colorVal))
 
   var col = vec3(3.0, 3.0, 3.0)
   col = mixN(col, fcol * (1.5'f32 * b + specular * 5.0'f32), a)
@@ -360,15 +362,18 @@ var
   shotFrames = 300
   # The key sim parameters, draggable in the UI panel.
   showParams = true
-  paramSize = 57.0'f32
-  paramAmount = 4.0'f32
-  paramPush = 3.0'f32
+  paramSize = 23.0'f32
+  paramAmount = 7.7'f32
+  paramPush = 8.8'f32
   paramDamp = 0.985'f32
   paramSpeedCap = 3.0'f32
-  paramFadeKeep = 0.997'f32
+  paramFadeKeep = 0.9984'f32
   paramFadeSub = 0.4'f32
   paramEraseSize = 3.0'f32
-  paramEraseForce = 1.5'f32
+  paramEraseForce = 1.4'f32
+  paramHue = 0.61'f32
+  paramSat = 0.85'f32
+  paramVal = 0.75'f32
 
 currentSplat = splatTextures[0]
 
@@ -415,13 +420,13 @@ proc mouseOnUi(): bool =
     return true
   let m = window.mousePos.vec2
   return showParams and m.x >= 8 and m.x <= 372 and
-    m.y >= 8 and m.y <= 640
+    m.y >= 8 and m.y <= 830
 
 window.onButtonPress = proc(button: Button) =
   if button == MouseLeft and not mouseOnUi():
-    # A new color, brush, rotation and size for every click. The
-    # golden ratio hue step keeps consecutive splats contrasting.
-    hue = (hue + 0.61803'f32) mod 1.0'f32
+    # A new brush, rotation and size for every click. The color is
+    # whatever the hsv sliders say.
+    hue = paramHue
     currentSplat = splatTextures[rand(splatTextures.len - 1)]
     currentAngle = rand(6.28318'f32)
     currentSize = paramSize * (0.75'f32 + rand(0.5'f32))
@@ -481,6 +486,8 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
     uniformLoc(program, "erasePos"), pendingErasePos.x, pendingErasePos.y)
   glUniform1f(uniformLoc(program, "eraseAmount"), pendingErase)
   glUniform1f(uniformLoc(program, "eraseRadius"), paramEraseSize)
+  glUniform1f(uniformLoc(program, "colorSat"), paramSat)
+  glUniform1f(uniformLoc(program, "colorVal"), paramVal)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
@@ -526,7 +533,7 @@ window.onFrame = proc() =
 
   # Param panel on top.
   sk.beginUI(window, window.size)
-  subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 600)):
+  subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 790)):
     text "size label":
       characters "splat size"
     scrubber "size", paramSize, 0.0'f32, 300.0'f32,
@@ -563,6 +570,18 @@ window.onFrame = proc() =
       characters "push brush force"
     scrubber "eraseForce", paramEraseForce, 0.0'f32, 8.0'f32,
       formatFloat(paramEraseForce, ffDecimal, 1)
+    text "hue label":
+      characters "color hue"
+    scrubber "hue", paramHue, 0.0'f32, 1.0'f32,
+      formatFloat(paramHue, ffDecimal, 2)
+    text "sat label":
+      characters "color sat"
+    scrubber "sat", paramSat, 0.0'f32, 1.0'f32,
+      formatFloat(paramSat, ffDecimal, 2)
+    text "val label":
+      characters "color val"
+    scrubber "val", paramVal, 0.0'f32, 1.0'f32,
+      formatFloat(paramVal, ffDecimal, 2)
   sk.endUi()
 
   window.swapBuffers()
