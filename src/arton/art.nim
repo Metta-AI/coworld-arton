@@ -198,9 +198,13 @@ proc planetFrag(
       ownerColor * (t * 0.85'f32)
   elif vMixK > 0.5'f32:
     base = ownerColor * vVariant
+  var outC = base * shade
+  if vVariant < 1.5'f32:
+    # Faces square to the light wash out to full white.
+    let wl = pow(d, 2.5'f32) * 0.9'f32
+    outC = outC * (1.0'f32 - wl) + vec3(1.0, 1.0, 1.0) * wl
   fragColor = vec4(
-    base.x * shade + sp, base.y * shade + sp, base.z * shade + sp,
-    1.0)
+    outC.x + sp, outC.y + sp, outC.z + sp, 1.0)
 
 type
   PlanetMesh = object
