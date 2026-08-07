@@ -367,6 +367,8 @@ var
   paramSpeedCap = 3.0'f32
   paramFadeKeep = 0.997'f32
   paramFadeSub = 0.4'f32
+  paramEraseSize = 3.0'f32
+  paramEraseForce = 1.5'f32
 
 currentSplat = splatTextures[0]
 
@@ -413,7 +415,7 @@ proc mouseOnUi(): bool =
     return true
   let m = window.mousePos.vec2
   return showParams and m.x >= 8 and m.x <= 372 and
-    m.y >= 8 and m.y <= 500
+    m.y >= 8 and m.y <= 640
 
 window.onButtonPress = proc(button: Button) =
   if button == MouseLeft and not mouseOnUi():
@@ -478,7 +480,7 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glUniform2f(
     uniformLoc(program, "erasePos"), pendingErasePos.x, pendingErasePos.y)
   glUniform1f(uniformLoc(program, "eraseAmount"), pendingErase)
-  glUniform1f(uniformLoc(program, "eraseRadius"), 3.0)
+  glUniform1f(uniformLoc(program, "eraseRadius"), paramEraseSize)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
@@ -506,7 +508,7 @@ window.onFrame = proc() =
     let pos = mouseCanvas()
     if onCanvas(pos):
       pendingErasePos = vec2(pos.x, float32(SimHeight) - pos.y)
-      pendingErase = 1.5
+      pendingErase = paramEraseForce
 
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
@@ -524,7 +526,7 @@ window.onFrame = proc() =
 
   # Param panel on top.
   sk.beginUI(window, window.size)
-  subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 470)):
+  subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 600)):
     text "size label":
       characters "splat size"
     scrubber "size", paramSize, 0.0'f32, 300.0'f32,
@@ -553,6 +555,14 @@ window.onFrame = proc() =
       characters "fade sub x1000"
     scrubber "fadeSub", paramFadeSub, 0.0'f32, 2.0'f32,
       formatFloat(paramFadeSub, ffDecimal, 2)
+    text "erase size label":
+      characters "push brush size"
+    scrubber "eraseSize", paramEraseSize, 1.0'f32, 30.0'f32,
+      formatFloat(paramEraseSize, ffDecimal, 1)
+    text "erase force label":
+      characters "push brush force"
+    scrubber "eraseForce", paramEraseForce, 0.0'f32, 8.0'f32,
+      formatFloat(paramEraseForce, ffDecimal, 1)
   sk.endUi()
 
   window.swapBuffers()
