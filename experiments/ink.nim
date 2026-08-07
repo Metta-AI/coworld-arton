@@ -314,8 +314,34 @@ for param in commandLineParams():
   elif param.startsWith("--frames="):
     shotFrames = parseInt(param.split("=")[1])
 
+proc viewTransform(): tuple[scale: float32, offset: Vec2] =
+  ## Uniform window to canvas scale and the letterbox offset that
+  ## keeps the square canvas square on any window size and dpi.
+  ## Same approach as the arton window: window.size and mousePos are
+  ## both in physical pixels, so one transform covers retina too.
+  let
+    size = window.size.vec2
+    scale = min(
+      size.x / float32(SimWidth),
+      size.y / float32(SimHeight)
+    )
+    drawSize = vec2(float32(SimWidth), float32(SimHeight)) * scale
+  return (scale, (size - drawSize) / 2)
+
+proc mouseCanvas(): Vec2 =
+  ## Mouse position in canvas pixels, letterbox and dpi corrected.
+  let view = viewTransform()
+  return (window.mousePos.vec2 - view.offset) / view.scale
+
+proc onCanvas(pos: Vec2): bool =
+  ## Whether a canvas position is on the paper at all.
+  pos.x >= 0 and pos.x < float32(SimWidth) and
+    pos.y >= 0 and pos.y < float32(SimHeight)
+
 proc queueSplat(pos: Vec2, amount: float32) =
   ## The next sim step injects one splat at this position.
+  if not onCanvas(pos):
+    return
   pendingPos = vec2(pos.x, float32(SimHeight) - pos.y)
   pendingAmount = amount
 
@@ -327,7 +353,7 @@ window.onButtonPress = proc(button: Button) =
     currentSplat = splatTextures[rand(splatTextures.len - 1)]
     currentAngle = rand(6.28318'f32)
     currentSize = 150.0'f32 + rand(160.0'f32)
-    queueSplat(window.mousePos.vec2, 2.5)
+    queueSplat(mouseCanvas(), 2.5)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -337,7 +363,18 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   ## bind source state texture, draw the fullscreen triangle.
   glBindFramebuffer(GL_FRAMEBUFFER, target)
   if target == 0:
+    # Present letterboxed: clear the whole window to paper white,
+    # then draw the square canvas centered at uniform scale.
     glViewport(0, 0, window.size.x, window.size.y)
+    glClearColor(0.995, 0.995, 0.995, 1)
+    glClear(GL_COLOR_BUFFER_BIT)
+    let view = viewTransform()
+    glViewport(
+      GLint(view.offset.x),
+      GLint(view.offset.y),
+      GLsizei(float32(SimWidth) * view.scale),
+      GLsizei(float32(SimHeight) * view.scale)
+    )
   else:
     glViewport(0, 0, SimWidth, SimHeight)
   glUseProgram(program)
@@ -376,7 +413,7 @@ window.onFrame = proc() =
 
   # Holding the mouse keeps pouring paint.
   if window.buttonDown[MouseLeft]:
-    queueSplat(window.mousePos.vec2, 0.4)
+    queueSplat(mouseCanvas(), 0.4)
 
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
