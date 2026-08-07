@@ -64,6 +64,16 @@ suite "map generation":
           minDist = a.radius + b.radius + PlanetSpacing
         check dx * dx + dy * dy >= minDist * minDist
 
+  test "homes are large and distinct":
+    let big = newSim(initSimConfig(seed = 9, playerCount = 4))
+    var owners: seq[int32]
+    for player in big.players:
+      let home = big.planets[player.homePlanet]
+      check home.ownerId == player.id
+      check home.size == PlanetLarge
+      check player.id notin owners
+      owners.add(player.id)
+
   test "each player owns exactly their home planet":
     var owned = 0
     for planet in sim.planets:

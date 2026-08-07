@@ -230,9 +230,22 @@ proc newSim*(config: SimConfig): Sim =
   for i in 0 ..< config.planetCount:
     sim.planets.add(sim.placePlanet(i))
   for playerId in 1'i32 .. config.playerCount:
-    var homePlanet = sim.rng.randRange(0, config.planetCount - 1)
-    while sim.planets[homePlanet].ownerId != NeutralOwner:
+    # Everyone starts on a big planet: prefer an untaken large one,
+    # otherwise grow whatever is picked. Only neutral planets can be
+    # chosen, so players can never override each other's homes.
+    var candidates: seq[int32]
+    for planet in sim.planets:
+      if planet.ownerId == NeutralOwner and planet.size == PlanetLarge:
+        candidates.add(planet.id)
+    var homePlanet: int32
+    if candidates.len > 0:
+      homePlanet = candidates[sim.rng.randRange(
+        0, int32(candidates.len) - 1)]
+    else:
       homePlanet = sim.rng.randRange(0, config.planetCount - 1)
+      while sim.planets[homePlanet].ownerId != NeutralOwner:
+        homePlanet = sim.rng.randRange(0, config.planetCount - 1)
+      sim.planets[homePlanet].size = PlanetLarge
     sim.planets[homePlanet].ownerId = playerId
     sim.players.add(Player(
       id: playerId,
