@@ -102,10 +102,12 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
       wsum = wsum + w
   var state = acc / wsum
 
-  # Flow slows down fast, ink dries very slowly.
+  # Flow slows down fast. Ink fades away over time, the exponential
+  # part thins heavy pools and the linear part makes even the last
+  # faint stain reach zero, so the page always clears back to white.
   state.x = state.x * 0.96'f32
   state.y = state.y * 0.96'f32
-  state.z = state.z * 0.9995'f32
+  state.z = max(state.z * 0.997'f32 - 0.0004'f32, 0.0'f32)
 
   # Splat: add mass, blend hue by mass, and push flow outward so the
   # paint blooms before it settles.
@@ -299,7 +301,7 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
     uniformLoc(program, "splatPos"), pendingPos.x, pendingPos.y)
   glUniform1f(uniformLoc(program, "splatHue"), hue)
   glUniform1f(uniformLoc(program, "splatAmount"), pendingAmount)
-  glUniform1f(uniformLoc(program, "splatRadius"), 18.0)
+  glUniform1f(uniformLoc(program, "splatRadius"), 9.0)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
