@@ -188,18 +188,20 @@ proc trailFrag(
   fragColor = vec4(vVel.x * b, vVel.y * b, m, vHue * m)
 
 proc shipVert(
-  gl_Position: var Vec4, vUv: var Vec2,
-  vertexPos: Vec2, vertexUv: Vec2
+  gl_Position: var Vec4, vUv: var Vec2, vColor: var Vec3,
+  vertexPos: Vec2, vertexUv: Vec2, vertexColor: Vec3
 ) =
   ## Window pixel coords to ndc, y flipped.
   let ndc = vertexPos / resolution * 2.0'f32 - vec2(1.0, 1.0)
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0)
   vUv = vertexUv
+  vColor = vertexColor
 
-proc shipFrag(fragColor: var Vec4, vUv: Vec2) =
-  ## The sprite draws as authored: white body, black stroke, like
-  ## the planet count letters. Premultiplied straight from the png.
-  fragColor = texture(paperTex, vUv)
+proc shipFrag(fragColor: var Vec4, vUv: Vec2, vColor: Vec3) =
+  ## Multiply tint: the white body takes the owner color while the
+  ## black stroke stays black, like the outlined letters.
+  let s = texture(paperTex, vUv)
+  fragColor = vec4(s.x * vColor.x, s.y * vColor.y, s.z * vColor.z, s.w)
 
 proc circleVert(
   gl_Position: var Vec4, vLocal: var Vec2, vRadius: var float32,
@@ -627,8 +629,9 @@ proc initArt*(): ArtState =
   glBindVertexArray(result.shipVao)
   glGenBuffers(1, addr result.shipVbo)
   glBindBuffer(GL_ARRAY_BUFFER, result.shipVbo)
-  let shipStride = GLsizei(16)
-  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8)]:
+  let shipStride = GLsizei(28)
+  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8),
+      ("vertexColor", 3, 16)]:
     let loc = glGetAttribLocation(
       result.shipProgram, spec[0].cstring)
     if loc >= 0:
@@ -769,12 +772,12 @@ proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
 proc drawShips*(
   art: var ArtState, viewport: IVec2,
   view: tuple[scale: float32, offset: Vec2], sim: Sim,
-  size: float32
+  colors: seq[Vec3], size: float32
 ) =
   ## Every ship as one rotated textured quad in a single gl draw.
   if sim.ships.len == 0:
     return
-  var verts = newSeqOfCap[float32](sim.ships.len * 6 * 4)
+  var verts = newSeqOfCap[float32](sim.ships.len * 6 * 7)
   let halfW = size / 2 * view.scale
   let halfH = halfW * art.shipAspect
   for ship in sim.ships:
@@ -789,11 +792,16 @@ proc drawShips*(
         float32(PI) / 2
       ca = cos(angle)
       sa = sin(angle)
+      color =
+        if ship.ownerId >= 1 and ship.ownerId <= int32(colors.len):
+          colors[ship.ownerId - 1]
+        else:
+          vec3(0.6, 0.6, 0.6)
     template corner(ox, oy, u, v: float32) =
       verts.add([
         float32(x + ox * ca - oy * sa),
         float32(y + ox * sa + oy * ca),
-        float32(u), float32(v)])
+        float32(u), float32(v), color.x, color.y, color.z])
     corner(-halfW, -halfH, 0, 0)
     corner(halfW, -halfH, 1, 0)
     corner(halfW, halfH, 1, 1)

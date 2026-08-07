@@ -177,6 +177,22 @@ proc strokeColor(ownerId: int32): ColorRGBA =
   return hsv(playerHue(ownerId), 95, 52).color.rgba
 
 let shipImage = readImage("data/ship.png")
+var shipSprites: Table[int32, Image]
+
+proc shipSprite(ownerId: int32): Image =
+  ## The sprite multiply tinted per owner: the white body takes the
+  ## owner color, the black stroke stays black. Screenshot path.
+  if ownerId in shipSprites:
+    return shipSprites[ownerId]
+  let tint = strokeColor(ownerId)
+  result = newImage(shipImage.width, shipImage.height)
+  for i in 0 ..< shipImage.data.len:
+    var p = shipImage.data[i]
+    p.r = uint8(int(p.r) * int(tint.r) div 255)
+    p.g = uint8(int(p.g) * int(tint.g) div 255)
+    p.b = uint8(int(p.b) * int(tint.b) div 255)
+    result.data[i] = p
+  shipSprites[ownerId] = result
 
 proc offenseFactor(sim: Sim, playerId: int32): int32 =
   ## Reads a player's offense factor.
@@ -325,7 +341,8 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       ctx.rotate(angle + float32(PI) / 2)
       let aspect =
         float32(shipImage.height) / float32(shipImage.width)
-      ctx.drawImage(shipImage, -10, -10 * aspect, 20, 20 * aspect)
+      ctx.drawImage(
+        shipSprite(ship.ownerId), -10, -10 * aspect, 20, 20 * aspect)
       ctx.restore()
 
   ctx.fillStyle = HudColor
@@ -968,7 +985,12 @@ proc drawWindow() {.measure.} =
         float32(s.r) / 255, float32(s.g) / 255,
         float32(s.b) / 255, 1.0))
     artState.drawDebugPlanets(windowSize, view, sim, fills, strokes)
-  artState.drawShips(windowSize, view, sim, 20.0)
+  var shipColors: seq[Vec3]
+  for player in sim.players:
+    let c = strokeColor(player.id)
+    shipColors.add(vec3(
+      float32(c.r) / 255, float32(c.g) / 255, float32(c.b) / 255))
+  artState.drawShips(windowSize, view, sim, shipColors, 20.0)
   when defined(fpsDebug):
     glFinish()
     fpsArtSecs += epochTime() - artT0
