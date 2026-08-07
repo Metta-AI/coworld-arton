@@ -286,9 +286,18 @@ var
   paramPurple = 0.55'f32
   paramInnerRot = 0.35'f32
   paramOuterRot = -0.65'f32
+  paramShellDist = 1.5'f32
+  paramRingDist = 1.78'f32
+  paramRingWidth = 0.16'f32
+  paramRingRot = 0.45'f32
+  paramJitter = 0.09'f32
   lastSubdiv = -1
   lastMissing = -1.0'f32
   lastPurple = -1.0'f32
+  lastShellDist = -1.0'f32
+  lastRingDist = -1.0'f32
+  lastRingWidth = -1.0'f32
+  lastJitter = -1.0'f32
 
 for param in commandLineParams():
   if param.startsWith("--shot="):
@@ -300,16 +309,22 @@ proc rebuildMeshes() =
   ## Regenerates both spheres from the current sliders and seed.
   let subdiv = clamp(int(paramSubdiv + 0.5'f32), 0, 4)
   uploadMesh(inner, buildMesh(
-    subdiv, 0.0, paramPurple, seed, 1.0, 0.09))
+    subdiv, 0.0, paramPurple, seed, 1.0, paramJitter))
   uploadMesh(outer, buildMesh(
-    subdiv, paramMissing, paramPurple, seed + 7, 1.5, 0.16))
+    subdiv, paramMissing, paramPurple, seed + 7, paramShellDist,
+    paramJitter * 1.8'f32))
+  uploadMesh(ring, buildRing(
+    paramRingDist, paramRingDist + paramRingWidth, 96))
   lastSubdiv = subdiv
   lastMissing = paramMissing
   lastPurple = paramPurple
+  lastShellDist = paramShellDist
+  lastRingDist = paramRingDist
+  lastRingWidth = paramRingWidth
+  lastJitter = paramJitter
 
 randomize()
 rebuildMeshes()
-uploadMesh(ring, buildRing(1.78, 1.94, 96))
 
 window.onButtonPress = proc(button: Button) =
   if button == KeyR:
@@ -354,12 +369,16 @@ window.onFrame = proc() =
   lastTime = now
   innerAngle += paramInnerRot * dt
   outerAngle += paramOuterRot * dt
-  ringAngle += 0.45'f32 * dt
+  ringAngle += paramRingRot * dt
 
   # Rebuild when a mesh slider moved.
   if clamp(int(paramSubdiv + 0.5'f32), 0, 4) != lastSubdiv or
     abs(paramMissing - lastMissing) > 0.001 or
-    abs(paramPurple - lastPurple) > 0.001:
+    abs(paramPurple - lastPurple) > 0.001 or
+    abs(paramShellDist - lastShellDist) > 0.001 or
+    abs(paramRingDist - lastRingDist) > 0.001 or
+    abs(paramRingWidth - lastRingWidth) > 0.001 or
+    abs(paramJitter - lastJitter) > 0.001:
       rebuildMeshes()
 
   # Letterboxed square viewport, like the arton window.
@@ -393,7 +412,7 @@ window.onFrame = proc() =
 
   # Param panel.
   sk.beginUI(window, window.size)
-  subWindow("Sphere Params", showParams, vec2(16, 16), vec2(348, 400)):
+  subWindow("Sphere Params", showParams, vec2(16, 16), vec2(348, 720)):
     text "subdiv label":
       characters "subdivisions"
     scrubber "subdiv", paramSubdiv, 0.0'f32, 4.0'f32, ""
@@ -409,6 +428,21 @@ window.onFrame = proc() =
     text "outer label":
       characters "outer rotation"
     scrubber "outerRot", paramOuterRot, -2.0'f32, 2.0'f32, ""
+    text "shell dist label":
+      characters "shell distance"
+    scrubber "shellDist", paramShellDist, 1.1'f32, 2.6'f32, ""
+    text "ring dist label":
+      characters "ring distance"
+    scrubber "ringDist", paramRingDist, 1.2'f32, 3.0'f32, ""
+    text "ring width label":
+      characters "ring width"
+    scrubber "ringWidth", paramRingWidth, 0.02'f32, 0.6'f32, ""
+    text "ring rot label":
+      characters "ring rotation"
+    scrubber "ringRot", paramRingRot, -2.0'f32, 2.0'f32, ""
+    text "jitter label":
+      characters "vertex jitter"
+    scrubber "jitter", paramJitter, 0.0'f32, 0.4'f32, ""
   sk.endUi()
 
   window.swapBuffers()
