@@ -731,10 +731,12 @@ proc checkOutcome(sim: var Sim) =
 proc tick*(sim: var Sim) {.measure.} =
   ## Advances the simulation by one tick with a fixed phase order.
   ## Does nothing once the match is decided.
-  if sim.outcome != MatchOngoing:
-    return
+  # Events clear even when the match is over and the sim is frozen,
+  # otherwise the final capture replays its splat forever.
   sim.deaths.setLen(0)
   sim.captures.setLen(0)
+  if sim.outcome != MatchOngoing:
+    return
   inc sim.tickCount
   sim.spawnWaves()
   sim.steerShips()
