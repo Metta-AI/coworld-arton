@@ -132,7 +132,7 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
         # the brush is dark since m carries the brush ink sample, so
         # the ink explodes outward from the stamp shape.
         let away = pos - splatPos + vec2(0.001, 0.001)
-        let push = normalize(away) * m * 4.0'f32
+        let push = normalize(away) * m * 8.0'f32
         state.x = state.x + push.x
         state.y = state.y + push.y
 
@@ -355,7 +355,7 @@ window.onButtonPress = proc(button: Button) =
     hue = (hue + 0.61803'f32) mod 1.0'f32
     currentSplat = splatTextures[rand(splatTextures.len - 1)]
     currentAngle = rand(6.28318'f32)
-    currentSize = 75.0'f32 + rand(80.0'f32)
+    currentSize = 37.0'f32 + rand(40.0'f32)
     queueSplat(mouseCanvas(), 2.5)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
