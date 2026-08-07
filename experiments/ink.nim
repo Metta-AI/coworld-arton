@@ -1,0 +1,352 @@
+## Ink splat experiment. Opens a white window, click (or drag) to
+## drop paint splats that bleed, diffuse and mix like wet ink.
+##
+## The state lives in two offscreen float buffers that ping pong
+## every frame through a sim shader (advect, diffuse, splat), then a
+## present shader draws the state with the paint look borrowed from
+## the shadertoy paint streams shaders: sqrt color mixing, density
+## shading and a gradient specular, tone mapped with tanh onto white.
+##
+## Run:        nim r experiments/ink.nim
+## Self test:  nim r experiments/ink.nim --shot=tmp/ink.png --frames=300
+##
+## Shaders are written in Nim and compiled to GLSL with shady.
+
+import
+  std/[os, strutils, times],
+  opengl, pixie, shady, vmath, windy
+
+const
+  SimWidth = 1024
+  SimHeight = 1024
+
+# Shader uniforms, shared by name with the GL side.
+var
+  statePrev: Uniform[Sampler2d]
+  resolution: Uniform[Vec2]
+  splatPos: Uniform[Vec2]
+  splatHue: Uniform[float32]
+  splatAmount: Uniform[float32]
+  splatRadius: Uniform[float32]
+
+## Helper functions compiled into the shaders. Custom names so they
+## never collide with GLSL builtins.
+
+proc inkG(x: Vec2): float32 =
+  ## Gaussian falloff, straight from the shadertoy G().
+  exp(-dot(x, x))
+
+proc sstep(a, b, x: float32): float32 =
+  ## smoothstep.
+  let t = clamp((x - a) / (b - a), 0.0'f32, 1.0'f32)
+  result = t * t * (3.0'f32 - 2.0'f32 * t)
+
+proc mixN(a, b: Vec3, k: float32): Vec3 =
+  ## The shadertoy paint mixer: mixing in squared space reads like
+  ## real pigment instead of muddy linear blends. Written as a manual
+  ## lerp because the scalar-t vector mix overload upsets shady.
+  let t = clamp(k, 0.0'f32, 1.0'f32)
+  let m = (a * a) * (1.0'f32 - t) + (b * b) * t
+  result = vec3(sqrt(m.x), sqrt(m.y), sqrt(m.z))
+
+proc mod6(v: Vec3): Vec3 =
+  ## Componentwise wrap into 0 .. 6, since vector mod is not a shady
+  ## builtin.
+  v - floor(v / 6.0'f32) * 6.0'f32
+
+proc hsvToRgb(c: Vec3): Vec3 =
+  ## The shadertoy hsv2rgb with cubic smoothing.
+  var rgb = clamp(
+    abs(mod6(c.x * 6.0'f32 + vec3(0.0, 4.0, 2.0)) - 3.0'f32) - 1.0'f32,
+    0.0'f32,
+    1.0'f32
+  )
+  rgb = rgb * rgb * (3.0'f32 - 2.0'f32 * rgb)
+  result = c.z * mix(vec3(1.0, 1.0, 1.0), rgb, c.y)
+
+proc dirV(ang: float32): Vec2 =
+  ## Unit vector for an angle, the shadertoy Dir().
+  vec2(cos(ang), sin(ang))
+
+proc tanhF(x: float32): float32 =
+  ## tanh via exp, since tanh is not a shady builtin.
+  1.0'f32 - 2.0'f32 / (exp(2.0'f32 * x) + 1.0'f32)
+
+proc tanh3(v: Vec3): Vec3 =
+  ## Componentwise tanh tone map.
+  vec3(tanhF(v.x), tanhF(v.y), tanhF(v.z))
+
+## The two render passes.
+
+proc inkVert(gl_Position: var Vec4, uv: var Vec2, vertexPos: Vec2) =
+  ## Fullscreen triangle.
+  uv = vertexPos * 0.5'f32 + 0.5'f32
+  gl_Position = vec4(vertexPos.x, vertexPos.y, 0.0, 1.0)
+
+proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
+  ## One sim step. State per pixel: xy = flow velocity, z = ink
+  ## density, w = pigment hue. Advect the state backward along the
+  ## flow, diffuse it with a small gaussian, damp, then inject the
+  ## frame's splat.
+  let pos = uv * resolution
+  let here = texture(statePrev, uv)
+  let src = (pos - here.xy * 1.5'f32) / resolution
+
+  var acc = vec4(0.0, 0.0, 0.0, 0.0)
+  var wsum = 0.0'f32
+  for i in 0 ..< 3:
+    for j in 0 ..< 3:
+      let o = vec2(float32(i) - 1.0'f32, float32(j) - 1.0'f32)
+      let w = inkG(o * 0.8'f32)
+      acc = acc + w * texture(statePrev, src + o / resolution)
+      wsum = wsum + w
+  var state = acc / wsum
+
+  # Flow slows down fast, ink dries very slowly.
+  state.x = state.x * 0.96'f32
+  state.y = state.y * 0.96'f32
+  state.z = state.z * 0.9995'f32
+
+  # Splat: add mass, blend hue by mass, and push flow outward so the
+  # paint blooms before it settles.
+  let d = (pos - splatPos) / splatRadius
+  let m = splatAmount * inkG(d)
+  if m > 0.0001'f32:
+    let total = state.z + m
+    state.w = (state.w * state.z + splatHue * m) / max(total, 0.0001'f32)
+    state.z = total
+    let away = pos - splatPos + vec2(0.001, 0.001)
+    let push = normalize(away) * m * 5.0'f32
+    state.x = state.x + push.x
+    state.y = state.y + push.y
+
+  fragColor = state
+
+proc inkDrawFrag(fragColor: var Vec4, uv: Vec2) =
+  ## Paint look, borrowed from the shadertoy render pass: density
+  ## drives coverage and depth, the density gradient drives a wet
+  ## specular, and everything composites onto white through mixN
+  ## with a tanh tone map.
+  let pos = uv * resolution
+  let state = texture(statePrev, uv)
+  let rho = state.z
+
+  let e = vec2(2.0'f32, 2.0'f32) / resolution
+  let gx = texture(statePrev, uv + vec2(e.x, 0.0)).z -
+    texture(statePrev, uv - vec2(e.x, 0.0)).z
+  let gy = texture(statePrev, uv + vec2(0.0, e.y)).z -
+    texture(statePrev, uv - vec2(0.0, e.y)).z
+  let grad = vec2(-0.5'f32 * gx, -0.5'f32 * gy)
+  let n = pow(length(grad), 0.2'f32) *
+    normalize(grad + vec2(0.00001, 0.00001))
+  let specular = pow(max(dot(n, dirV(1.4'f32)), 0.0'f32), 3.5'f32)
+
+  let a = pow(sstep(0.0'f32, 1.0'f32, rho), 0.1'f32)
+  let b = exp(-1.7'f32 * sstep(0.5'f32, 3.75'f32, rho))
+
+  let fcol = hsvToRgb(vec3(state.w, 0.85'f32, 0.75'f32))
+
+  var col = vec3(3.0, 3.0, 3.0)
+  col = mixN(col, fcol * (1.5'f32 * b + specular * 5.0'f32), a)
+  col = tanh3(col)
+  fragColor = vec4(col.x, col.y, col.z, 1.0)
+
+## GL plumbing: shader compilation, fbo ping pong, fullscreen
+## triangle. Raw OpenGL, buffer to buffer.
+
+proc compileShader(kind: GLenum, source: string): GLuint =
+  ## Compiles one shader stage or quits with the info log.
+  result = glCreateShader(kind)
+  let arr = allocCStringArray([source])
+  glShaderSource(result, 1, arr, nil)
+  deallocCStringArray(arr)
+  glCompileShader(result)
+  var status: GLint
+  glGetShaderiv(result, GL_COMPILE_STATUS, addr status)
+  if status == 0:
+    var length: GLint
+    glGetShaderiv(result, GL_INFO_LOG_LENGTH, addr length)
+    var log = newString(length)
+    glGetShaderInfoLog(result, length, nil, log.cstring)
+    quit "shader compile failed:\n" & log & "\n" & source
+
+proc makeProgram(vertSrc, fragSrc: string): GLuint =
+  ## Links a vertex plus fragment program or quits with the log.
+  let
+    vert = compileShader(GL_VERTEX_SHADER, vertSrc)
+    frag = compileShader(GL_FRAGMENT_SHADER, fragSrc)
+  result = glCreateProgram()
+  glAttachShader(result, vert)
+  glAttachShader(result, frag)
+  glLinkProgram(result)
+  var status: GLint
+  glGetProgramiv(result, GL_LINK_STATUS, addr status)
+  if status == 0:
+    var length: GLint
+    glGetProgramiv(result, GL_INFO_LOG_LENGTH, addr length)
+    var log = newString(length)
+    glGetProgramInfoLog(result, length, nil, log.cstring)
+    quit "shader link failed:\n" & log
+
+proc makeStateTexture(): GLuint =
+  ## One RGBA32F sim buffer, linear filtered for smooth advection.
+  glGenTextures(1, addr result)
+  glBindTexture(GL_TEXTURE_2D, result)
+  glTexImage2D(
+    GL_TEXTURE_2D, 0, GLint(GL_RGBA32F),
+    SimWidth, SimHeight, 0, GL_RGBA, cGL_FLOAT, nil
+  )
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(
+    GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
+  glTexParameteri(
+    GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
+
+let window = newWindow(
+  "Ink",
+  ivec2(SimWidth, SimHeight),
+  vsync = true
+)
+makeContextCurrent(window)
+loadExtensions()
+
+let
+  simProgram = makeProgram(
+    toShader(inkVert, glsl3Desktop, shaderVertex),
+    toShader(inkSimFrag, glsl3Desktop, shaderFragment)
+  )
+  drawProgram = makeProgram(
+    toShader(inkVert, glsl3Desktop, shaderVertex),
+    toShader(inkDrawFrag, glsl3Desktop, shaderFragment)
+  )
+
+# Fullscreen triangle.
+var
+  vao: GLuint
+  vbo: GLuint
+  triangle = [(-1.0'f32, -1.0'f32), (3.0'f32, -1.0'f32), (-1.0'f32, 3.0'f32)]
+glGenVertexArrays(1, addr vao)
+glBindVertexArray(vao)
+glGenBuffers(1, addr vbo)
+glBindBuffer(GL_ARRAY_BUFFER, vbo)
+glBufferData(
+  GL_ARRAY_BUFFER, sizeof(triangle), addr triangle, GL_STATIC_DRAW)
+glEnableVertexAttribArray(0)
+glVertexAttribPointer(0, 2, cGL_FLOAT, GL_FALSE, 8, nil)
+
+# Ping pong state buffers and one fbo.
+var
+  stateTex = [makeStateTexture(), makeStateTexture()]
+  fbo: GLuint
+  current = 0
+glGenFramebuffers(1, addr fbo)
+for tex in stateTex:
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+  glFramebufferTexture2D(
+    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
+  glClearColor(0, 0, 0, 0)
+  glClear(GL_COLOR_BUFFER_BIT)
+
+var
+  hue = 0.08'f32
+  pendingAmount = 0.0'f32
+  pendingPos = vec2(0, 0)
+  frameCount = 0
+  shotPath = ""
+  shotFrames = 300
+  autoDemo = false
+
+for param in commandLineParams():
+  if param.startsWith("--shot="):
+    shotPath = param.split("=")[1]
+    autoDemo = true
+  elif param.startsWith("--frames="):
+    shotFrames = parseInt(param.split("=")[1])
+
+proc queueSplat(pos: Vec2, amount: float32) =
+  ## The next sim step injects one splat at this position.
+  pendingPos = vec2(pos.x, float32(SimHeight) - pos.y)
+  pendingAmount = amount
+
+window.onButtonPress = proc(button: Button) =
+  if button == MouseLeft:
+    # A new color for every click, stepping the wheel by the golden
+    # ratio so consecutive splats always contrast.
+    hue = (hue + 0.61803'f32) mod 1.0'f32
+    queueSplat(window.mousePos.vec2, 6.0)
+
+proc uniformLoc(program: GLuint, name: string): GLint =
+  glGetUniformLocation(program, name.cstring)
+
+proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
+  ## One buffer to buffer pass: bind target fbo (0 for the screen),
+  ## bind source state texture, draw the fullscreen triangle.
+  glBindFramebuffer(GL_FRAMEBUFFER, target)
+  if target == 0:
+    glViewport(0, 0, window.size.x, window.size.y)
+  else:
+    glViewport(0, 0, SimWidth, SimHeight)
+  glUseProgram(program)
+  glActiveTexture(GL_TEXTURE0)
+  glBindTexture(GL_TEXTURE_2D, sourceTex)
+  glUniform1i(uniformLoc(program, "statePrev"), 0)
+  glUniform2f(
+    uniformLoc(program, "resolution"),
+    float32(SimWidth), float32(SimHeight)
+  )
+  glUniform2f(
+    uniformLoc(program, "splatPos"), pendingPos.x, pendingPos.y)
+  glUniform1f(uniformLoc(program, "splatHue"), hue)
+  glUniform1f(uniformLoc(program, "splatAmount"), pendingAmount)
+  glUniform1f(uniformLoc(program, "splatRadius"), 18.0)
+  glDrawArrays(GL_TRIANGLES, 0, 3)
+
+proc saveShot(path: string) =
+  ## Reads back the screen and writes a png.
+  let image = newImage(window.size.x, window.size.y)
+  glBindFramebuffer(GL_FRAMEBUFFER, 0)
+  glReadPixels(
+    0, 0, window.size.x, window.size.y,
+    GL_RGBA, GL_UNSIGNED_BYTE, addr image.data[0]
+  )
+  image.flipVertical()
+  image.writeFile(path)
+  echo "Saved ", path
+
+window.onFrame = proc() =
+  inc frameCount
+
+  # Holding the mouse keeps pouring paint.
+  if window.buttonDown[MouseLeft]:
+    queueSplat(window.mousePos.vec2, 1.5)
+
+  # Scripted splats for the self test.
+  if autoDemo and frameCount mod 45 == 1 and frameCount < 250:
+    hue = (hue + 0.61803'f32) mod 1.0'f32
+    let spot = vec2(
+      200.0'f32 + float32(frameCount mod 7) * 100.0'f32,
+      300.0'f32 + float32(frameCount mod 3) * 180.0'f32
+    )
+    queueSplat(spot, 6.0)
+
+  # Sim pass: current state -> other buffer.
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+  glFramebufferTexture2D(
+    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+    stateTex[1 - current], 0
+  )
+  runPass(simProgram, fbo, stateTex[current])
+  current = 1 - current
+  pendingAmount = 0.0
+
+  # Present pass: state -> screen.
+  runPass(drawProgram, 0, stateTex[current])
+  window.swapBuffers()
+
+  if shotPath != "" and frameCount >= shotFrames:
+    saveShot(shotPath)
+    quit(0)
+
+while not window.closeRequested:
+  pollEvents()
