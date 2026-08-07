@@ -14,7 +14,7 @@
 
 import
   std/[hashes, os, random, strutils, times],
-  opengl, pixie, shady, silky, vmath, windy
+  noisy, opengl, pixie, shady, silky, vmath, windy
 
 const WindowSize = 1024
 
@@ -125,12 +125,19 @@ proc buildMesh(
     vec3(0.02, 0.02, 0.03)
   ]
   var faceRand = initRand(seed)
+  let islands = initSimplex(int(seed))
   for tri in icosphere(subdivisions):
-    let keep = faceRand.rand(1.0'f32) >= missing
     let colorPick = faceRand.rand(1.0'f32)
     let purple = purples[faceRand.rand(purples.len - 1)]
     let black = blacks[faceRand.rand(blacks.len - 1)]
-    if not keep:
+    # Triangles disappear in islands: a smooth simplex noise field
+    # over the sphere decides what stays, so holes and kept shards
+    # form connected patches instead of random speckle.
+    let centroid = normalize(tri[0] + tri[1] + tri[2])
+    let field = islands.value(
+      centroid.x * 1.3'f32, centroid.y * 1.3'f32,
+      centroid.z * 1.3'f32) * 0.5'f32 + 0.5'f32
+    if field < missing:
       continue
     let
       a = jitter(tri[0], seed, jitterAmount) * scale
@@ -142,6 +149,36 @@ proc buildMesh(
       result.add([p.x, p.y, p.z])
       result.add([normal.x, normal.y, normal.z])
       result.add([color.x, color.y, color.z])
+
+proc buildRing(
+  innerRadius, outerRadius: float32,
+  segments: int
+): seq[float32] =
+  ## A flat annulus in the xy plane with a gray to player color
+  ## gradient around it. Normals point along the light so it renders
+  ## as plain unshaded color.
+  let
+    gray = vec3(0.88, 0.87, 0.89)
+    accent = vec3(0.76, 0.63, 0.91)
+    lightNormal = normalize(vec3(0.15, 1.0, 0.45))
+  proc ringColor(angle: float32): Vec3 =
+    let t = (cos(angle) + 1.0'f32) / 2.0'f32
+    gray * (1.0'f32 - t) + accent * t
+  for i in 0 ..< segments:
+    let
+      a0 = float32(i) / float32(segments) * 2.0'f32 * PI
+      a1 = float32(i + 1) / float32(segments) * 2.0'f32 * PI
+      i0 = vec3(cos(a0) * innerRadius, sin(a0) * innerRadius, 0)
+      i1 = vec3(cos(a1) * innerRadius, sin(a1) * innerRadius, 0)
+      o0 = vec3(cos(a0) * outerRadius, sin(a0) * outerRadius, 0)
+      o1 = vec3(cos(a1) * outerRadius, sin(a1) * outerRadius, 0)
+      c0 = ringColor(a0)
+      c1 = ringColor(a1)
+    for (p, c) in [(i0, c0), (o0, c0), (o1, c1), (i0, c0), (o1, c1),
+        (i1, c1)]:
+      result.add([p.x, p.y, p.z])
+      result.add([lightNormal.x, lightNormal.y, lightNormal.z])
+      result.add([c.x, c.y, c.z])
 
 ## GL plumbing.
 
@@ -234,9 +271,11 @@ proc uploadMesh(mesh: var Mesh, data: seq[float32]) =
 var
   inner: Mesh
   outer: Mesh
+  ring: Mesh
   seed = int64(12345)
   innerAngle = 0.0'f32
   outerAngle = 0.0'f32
+  ringAngle = 0.0'f32
   frameCount = 0
   shotPath = ""
   shotFrames = 60
@@ -270,6 +309,7 @@ proc rebuildMeshes() =
 
 randomize()
 rebuildMeshes()
+uploadMesh(ring, buildRing(1.78, 1.94, 96))
 
 window.onButtonPress = proc(button: Button) =
   if button == KeyR:
@@ -314,6 +354,7 @@ window.onFrame = proc() =
   lastTime = now
   innerAngle += paramInnerRot * dt
   outerAngle += paramOuterRot * dt
+  ringAngle += 0.45'f32 * dt
 
   # Rebuild when a mesh slider moved.
   if clamp(int(paramSubdiv + 0.5'f32), 0, 4) != lastSubdiv or
@@ -342,6 +383,11 @@ window.onFrame = proc() =
       vec3(0.0'f32, 1, 0))
   drawMesh(inner, rotateY(innerAngle) * rotateX(0.35'f32), vp)
   drawMesh(outer, rotateY(outerAngle) * rotateZ(0.22'f32), vp)
+  # The ring faces the camera: tilt its plane to be perpendicular to
+  # the view direction, spinning in that plane so the gray to player
+  # color gradient visibly rotates.
+  let cameraTilt = -arctan2(1.2'f32, 6.2'f32)
+  drawMesh(ring, rotateX(cameraTilt) * rotateZ(ringAngle), vp)
 
   glDisable(GL_DEPTH_TEST)
 
