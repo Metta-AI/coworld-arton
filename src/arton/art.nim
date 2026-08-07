@@ -337,9 +337,9 @@ proc inkTexture(image: Image): GLuint =
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
 
 proc shipBrushTexture(): GLuint =
-  ## The ship sprite as an ink stamp, rotated nose to plus x, so a
-  ## trail stamp rotated by the ship heading inks its exact shape.
-  let sprite = readImage("data/ship.png")
+  ## The blurred ship splat as an ink stamp, rotated nose to plus x,
+  ## so a trail stamp rotated by the ship heading inks its shape.
+  let sprite = readImage("data/ship_splat.png")
   let half = vec2(
     float32(sprite.width) / 2, float32(sprite.height) / 2)
   let image = newImage(sprite.width, sprite.height)
