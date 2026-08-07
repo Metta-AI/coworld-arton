@@ -188,7 +188,9 @@ proc planetFrag(
     let t = vMixK
     base = vec3(0.88, 0.87, 0.89) * (1.0'f32 - t) +
       ownerColor * (t * 0.85'f32)
-  elif vMixK > 0.5'f32:
+  else:
+    # Every face is tinted with the owner color, the mix flag only
+    # picks the bright or the dim brightness pool.
     base = ownerColor * vVariant
   var outC = base * shade
   if vVariant < 1.5'f32:
@@ -337,7 +339,7 @@ proc buildOrb(
   for tri in icosphere(2):
     let colorPick = faceRand.rand(1.0'f32)
     let teamV = [0.75'f32, 0.88, 0.56, 0.95][faceRand.rand(3)]
-    let blackV = [0.06'f32, 0.13, 0.02][faceRand.rand(2)]
+    let dimV = [0.30'f32, 0.42, 0.22][faceRand.rand(2)]
     let centroid = normalize(tri[0] + tri[1] + tri[2])
     let field = islands.value(
       centroid.x * 1.3'f32, centroid.y * 1.3'f32,
@@ -353,7 +355,7 @@ proc buildOrb(
     for p in [a, b, c]:
       result.add([p.x, p.y, p.z, normal.x, normal.y, normal.z,
         (if team: 1.0'f32 else: 0.0'f32),
-        (if team: teamV else: blackV)])
+        (if team: teamV else: dimV)])
 
 proc buildRing(innerR, outerR: float32): seq[float32] =
   ## Sphere.nim ring: flat annulus, gradient encoded in mixK with

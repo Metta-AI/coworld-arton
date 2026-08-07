@@ -97,7 +97,7 @@ proc inkVert(gl_Position: var Vec4, uv: var Vec2, vertexPos: Vec2) =
 
 proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
   ## One sim step. State per pixel: xy = flow velocity, z = ink
-  ## density, w = pigment hue. Advect the state backward along the
+  ## density, w = pigment hue times density. Advect the state backward along the
   ## flow, diffuse it with a small gaussian, damp, then inject the
   ## frame's splat.
   let pos = uv * resolution
@@ -136,7 +136,10 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
   if speed > speedCap:
     state.x = state.x * speedCap / speed
     state.y = state.y * speedCap / speed
+  let zBefore = state.z
   state.z = max(state.z * fadeMul - fadeSub, 0.0'f32)
+  # Hue mass scales with the mass it belongs to.
+  state.w = state.w * state.z / max(zBefore, 0.0001'f32)
 
   # The push brush: a tiny fuzzy circle that shoves paint away from
   # the cursor like a stick dragged through wet ink. Mostly velocity
@@ -163,10 +166,8 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
       q.y > 0.0'f32 and q.y < 1.0'f32:
       let m = splatAmount * texture(splatTex, q).x
       if m > 0.0001'f32:
-        let total = state.z + m
-        state.w = (state.w * state.z + splatHue * m) /
-          max(total, 0.0001'f32)
-        state.z = total
+        state.w = state.w + splatHue * m
+        state.z = state.z + m
         # Velocity kicks outward from the splat center, only where
         # the brush is dark since m carries the brush ink sample, so
         # the ink explodes outward from the stamp shape.
@@ -199,7 +200,8 @@ proc inkDrawFrag(fragColor: var Vec4, uv: Vec2) =
   let a = pow(sstep(0.0'f32, 1.0'f32, rho), 0.1'f32)
   let b = exp(-1.7'f32 * sstep(0.5'f32, 3.75'f32, rho))
 
-  let fcol = hsvToRgb(vec3(state.w, colorSat, colorVal))
+  let hue = state.w / max(rho, 0.0001'f32)
+  let fcol = hsvToRgb(vec3(hue, colorSat, colorVal))
 
   var col = vec3(3.0, 3.0, 3.0)
   col = mixN(col, fcol * (1.5'f32 * b + specular * 5.0'f32), a)
