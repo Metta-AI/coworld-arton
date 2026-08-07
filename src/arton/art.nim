@@ -539,7 +539,7 @@ proc initArt*(): ArtState =
 
   result.paper = loadTexture("data/bg.png", red = false)
   var paths: seq[string]
-  for path in walkFiles("experiments/data/splats/*.png"):
+  for path in walkFiles("data/splats/*.png"):
     paths.add(path)
   paths.sort()
   for path in paths:
