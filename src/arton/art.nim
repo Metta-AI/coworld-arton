@@ -21,6 +21,7 @@ var
   splatAmount: Uniform[float32]
   splatSize: Uniform[float32]
   splatAngle: Uniform[float32]
+  splatVel: Uniform[Vec2]
   mvp: Uniform[Mat4]
   modelRot: Uniform[Mat4]
   ownerColor: Uniform[Vec3]
@@ -121,10 +122,16 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
       state.w = (state.w * state.z + splatHue * m) /
         max(total, 0.0001'f32)
       state.z = total
-      let away = pos - splatPos + vec2(0.001, 0.001)
-      let push = normalize(away) * m * 8.8'f32
-      state.x = state.x + push.x
-      state.y = state.y + push.y
+      # Directed splats, like ship trails, drag the ink along their
+      # motion. Undirected ones burst outward from the center.
+      if abs(splatVel.x) + abs(splatVel.y) > 0.001'f32:
+        state.x = state.x + splatVel.x * m
+        state.y = state.y + splatVel.y * m
+      else:
+        let away = pos - splatPos + vec2(0.001, 0.001)
+        let push = normalize(away) * m * 8.8'f32
+        state.x = state.x + push.x
+        state.y = state.y + push.y
   fragColor = state
 
 proc artDrawFrag(fragColor: var Vec4, uv: Vec2) =
@@ -207,6 +214,8 @@ type
     x*, y*: float32
     hue*: float32
     size*: float32
+    amount*: float32
+    vx*, vy*: float32
 
   ArtState* = object
     simProgram, injectProgram, drawProgram, planetProgram: GLuint
@@ -471,12 +480,19 @@ proc fullscreenPass(
   glUniform1f(uniformLoc(program, "splatAmount"), amount)
   glUniform1f(uniformLoc(program, "splatSize"), splat.size)
   glUniform1f(uniformLoc(program, "splatAngle"), angle)
+  glUniform2f(uniformLoc(program, "splatVel"), splat.vx, splat.vy)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
-proc queueSplat*(art: var ArtState, x, y, hue, size: float32) =
-  ## World position splat, queued for the next frame's inject passes.
+proc queueSplat*(
+  art: var ArtState, x, y, hue, size: float32,
+  amount = 4.0'f32, vx = 0.0'f32, vy = 0.0'f32
+) =
+  ## World position splat, queued for the next frame's inject
+  ## passes. A velocity makes it a directed trail stain instead of
+  ## an outward burst. The y axis flips into canvas space.
   art.queue.add(Splat(
-    x: x, y: float32(WorldHeight) - y, hue: hue, size: size))
+    x: x, y: float32(WorldHeight) - y, hue: hue, size: size,
+    amount: amount, vx: vx, vy: -vy))
 
 proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
   ## One planet mesh with its own model matrix.
@@ -523,7 +539,7 @@ proc frame*(
     art.fullscreenPass(
       art.injectProgram, art.fbo, art.stateTex[art.current],
       art.brushes[rand(art.brushes.len - 1)],
-      splat, 4.0, rand(6.28318'f32), viewport)
+      splat, splat.amount, rand(6.28318'f32), viewport)
     art.current = 1 - art.current
     inc injected
 

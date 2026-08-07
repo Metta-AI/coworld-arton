@@ -679,6 +679,17 @@ proc stepSim() =
         artState.queueSplat(
           float32(capture.x), float32(capture.y),
           playerHue(capture.ownerId) / 360.0, 240.0)
+      # Ships drag the ink with them and leave a faint stain of
+      # their color, staggered by age so the queue stays sane.
+      for ship in sim.ships:
+        if ship.age mod 9 == 3 and artState.queue.len < 48:
+          artState.queueSplat(
+            float32(ship.x div SubpixelScale),
+            float32(ship.y div SubpixelScale),
+            playerHue(ship.ownerId) / 360.0, 8.0,
+            amount = 0.5,
+            vx = float32(cos256(ship.heading)) / 1365.0,
+            vy = float32(sin256(ship.heading)) / 1365.0)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
