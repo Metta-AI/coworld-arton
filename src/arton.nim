@@ -3,9 +3,12 @@
 ## Headless screenshot: nim r src/arton.nim --shot=out.png --ticks=900 --demo
 
 import
-  std/[math, os, strformat, strutils, times],
+  std/[math, os, strformat, strutils, tables, times],
   boxy, bumpy, opengl, pixie, windy,
   arton/agents, arton/art, arton/profiles, arton/sims
+
+when not defined(emscripten):
+  import silky
 
 const
   FontPath = "data/IBMPlexSans-Regular.ttf"
@@ -36,6 +39,19 @@ var
   artMode = true
   artReady = false
   artState: ArtState
+  showParams = false
+  paramTab = 0
+  ## Capture splats wait out this many ticks before landing, so a
+  ## contested planet that flips owners rapidly does not bury the
+  ## board in giant blobs. Every extra flip re-arms the timer and
+  ## shrinks the final splat.
+  pendingCaptures: Table[
+    (int32, int32), tuple[ticks, ownerId, flips: int32]]
+
+const CaptureSplatDelay = 10'i32
+
+when defined(glShotDebug):
+  var glShotFrames = 0
 
 proc aiPaths(): seq[string] =
   ## Script paths from repeated --ai=path arguments. Every flag adds
@@ -518,6 +534,31 @@ let bxy = newBoxy()
 var boxyVao: GLint
 glGetIntegerv(GL_VERTEX_ARRAY_BINDING, addr boxyVao)
 
+when not defined(emscripten):
+  # The F1 params panel, silky UI reusing the basicwindow example
+  # widget skins with the game's own font.
+  const SilkyData = "../silky/examples/basicwindow/data/"
+  let silkyBuilder = newAtlasBuilder(1024, 4)
+  silkyBuilder.addDir(SilkyData, SilkyData)
+  silkyBuilder.addFont(FontPath, "H1", 32.0)
+  silkyBuilder.addFont(FontPath, "Default", 18.0)
+  createDir("tmp")
+  silkyBuilder.write("tmp/arton_atlas.png")
+  let sk = newSilky(window, "tmp/arton_atlas.png")
+
+proc mouseOnUi(): bool =
+  ## True while the mouse should go to the params panel, not the
+  ## game, so panel clicks never select planets or send ships.
+  when defined(emscripten):
+    return false
+  else:
+    if not showParams:
+      return false
+    if sk.interactor.hotId != -1:
+      return true
+    let m = window.mousePos.vec2
+    return m.x >= 16 and m.x <= 412 and m.y >= 16 and m.y <= 780
+
 proc viewTransform(windowSize: IVec2): tuple[scale: float32, offset: Vec2] =
   ## Uniform world to window scale and the letterbox offset that
   ## keeps the world aspect ratio on any window size.
@@ -574,6 +615,8 @@ proc handleBoxSelect(boxRect: Rect) =
         selected.add(planet.id)
 
 window.onButtonPress = proc(button: Button) =
+  if button in {MouseLeft, DoubleClick} and mouseOnUi():
+    return
   case button
   of DoubleClick:
     selected = sim.ownPlanets(HumanPlayer)
@@ -610,6 +653,8 @@ window.onButtonPress = proc(button: Button) =
     demoEnabled = not demoEnabled
   of KeyF10:
     artMode = not artMode
+  of KeyF1:
+    showParams = not showParams
   of KeyF2:
     let box = boxRectNow(mouseWorld())
     takeScreenshot(sim.renderFrame(selected, box, false, -1, @[]))
@@ -669,32 +714,152 @@ proc stepSim() =
     stepAgents(sim)
     sim.tick()
     if artReady:
-      # Every annihilation splats ink in the ship's color, every
-      # capture splats big in the conqueror's color.
+      # Every annihilation splats ink in the ship's color.
       for death in sim.deaths:
         artState.queueSplat(
           float32(death.x), float32(death.y),
-          playerHue(death.ownerId) / 360.0, 48.0)
+          playerHue(death.ownerId) / 360.0, artParams.deathSize,
+          amount = artParams.deathAmount)
+      # Captures only splat once the planet has kept its new owner
+      # for a few ticks. A flip during the wait re-arms the timer
+      # with the newest owner and shrinks the eventual splat, so
+      # planets trading hands every tick do not flood the canvas.
       for capture in sim.captures:
-        artState.queueSplat(
-          float32(capture.x), float32(capture.y),
-          playerHue(capture.ownerId) / 360.0, 240.0)
+        let key = (capture.x, capture.y)
+        var pending = pendingCaptures.getOrDefault(key)
+        pending.ticks = CaptureSplatDelay
+        pending.ownerId = capture.ownerId
+        inc pending.flips
+        pendingCaptures[key] = pending
+      var fired: seq[(int32, int32)]
+      for key, pending in pendingCaptures.mpairs:
+        dec pending.ticks
+        if pending.ticks <= 0:
+          artState.queueSplat(
+            float32(key[0]), float32(key[1]),
+            playerHue(pending.ownerId) / 360.0,
+            artParams.captureSize,
+            amount = artParams.captureAmount /
+              float32(pending.flips))
+          fired.add(key)
+      for key in fired:
+        pendingCaptures.del(key)
       # Ships drag the ink with them and leave a faint stain of
       # their color, staggered by age so the queue stays sane.
       for ship in sim.ships:
-        if ship.age mod 9 == 3 and artState.queue.len < 48:
+        let every = max(int32(artParams.trailEvery), 1)
+        if ship.age mod every == 3 and artState.queue.len < 48:
           artState.queueSplat(
             float32(ship.x div SubpixelScale),
             float32(ship.y div SubpixelScale),
-            playerHue(ship.ownerId) / 360.0, 8.0,
-            amount = 0.5,
-            vx = float32(cos256(ship.heading)) / 1365.0,
-            vy = float32(sin256(ship.heading)) / 1365.0)
+            playerHue(ship.ownerId) / 360.0, artParams.trailSize,
+            amount = artParams.trailAmount,
+            vx = float32(cos256(ship.heading)) / 4096.0 *
+              artParams.trailDrag,
+            vy = float32(sin256(ship.heading)) / 4096.0 *
+              artParams.trailDrag)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
       keep.add(planetId)
   selected = keep
+
+when not defined(emscripten):
+  proc fmtParam(value: float32, digits: int): string =
+    if digits == 0:
+      $int(value)
+    else:
+      formatFloat(value, ffDecimal, digits)
+
+  template param(
+    labelText, id: string, value: var float32, lo, hi: float32,
+    digits: int
+  ) =
+    ## One labeled scrubber row with its live value.
+    text id & " label":
+      characters labelText
+    scrubber id, value, lo, hi, fmtParam(value, digits)
+
+  template shipsTab() =
+    param "trail drag", "trailDrag",
+      artParams.trailDrag, 0.0'f32, 8.0'f32, 1
+    param "trail stain amount", "trailAmount",
+      artParams.trailAmount, 0.0'f32, 3.0'f32, 2
+    param "trail stain size", "trailSize",
+      artParams.trailSize, 1.0'f32, 32.0'f32, 0
+    param "trail every N ticks", "trailEvery",
+      artParams.trailEvery, 1.0'f32, 30.0'f32, 0
+    param "death splat size", "deathSize",
+      artParams.deathSize, 4.0'f32, 200.0'f32, 0
+    param "death splat amount", "deathAmount",
+      artParams.deathAmount, 0.0'f32, 10.0'f32, 1
+    param "capture splat size", "captureSize",
+      artParams.captureSize, 20.0'f32, 600.0'f32, 0
+    param "capture splat amount", "captureAmount",
+      artParams.captureAmount, 0.0'f32, 10.0'f32, 1
+
+  template planetsTab() =
+    param "color sat", "planetSat",
+      artParams.planetSat, 0.0'f32, 1.0'f32, 2
+    param "color val", "planetVal",
+      artParams.planetVal, 0.0'f32, 1.0'f32, 2
+    param "spin speed", "spinSpeed",
+      artParams.spinSpeed, 0.0'f32, 3.0'f32, 2
+    param "white washout", "washout",
+      artParams.washout, 0.0'f32, 1.0'f32, 2
+    param "specular", "specular",
+      artParams.specular, 0.0'f32, 1.0'f32, 2
+    param "inner jitter", "jitterInner",
+      artParams.jitterInner, 0.0'f32, 0.5'f32, 3
+    param "shell jitter", "jitterShell",
+      artParams.jitterShell, 0.0'f32, 0.5'f32, 3
+    param "shell scale", "shellScale",
+      artParams.shellScale, 1.0'f32, 1.6'f32, 2
+    param "shell missing", "shellMissing",
+      artParams.shellMissing, 0.0'f32, 0.95'f32, 2
+    param "ring inner", "ringInner",
+      artParams.ringInner, 1.0'f32, 2.0'f32, 2
+    param "ring outer", "ringOuter",
+      artParams.ringOuter, 1.02'f32, 2.2'f32, 2
+
+  template inkTab() =
+    param "flow damping", "velDamp",
+      artParams.velDamp, 0.9'f32, 1.0'f32, 3
+    param "speed cap", "speedCap",
+      artParams.speedCap, 0.5'f32, 8.0'f32, 1
+    param "fade keep", "fadeKeep",
+      artParams.fadeKeep, 0.985'f32, 1.0'f32, 4
+    param "fade sub x1000", "fadeSubK",
+      artParams.fadeSubK, 0.0'f32, 2.0'f32, 2
+    param "burst push", "burstPush",
+      artParams.burstPush, 0.0'f32, 20.0'f32, 1
+    param "ink sat", "inkSat",
+      artParams.inkSat, 0.0'f32, 1.0'f32, 2
+    param "ink val", "inkVal",
+      artParams.inkVal, 0.0'f32, 1.0'f32, 2
+    param "paper mix", "paperMix",
+      artParams.paperMix, 0.0'f32, 1.0'f32, 2
+
+  proc drawParamsPanel(windowSize: IVec2) =
+    ## The F1 tabbed params panel, drawn over everything.
+    if not showParams:
+      return
+    sk.beginUI(window, windowSize)
+    subWindow("Params (F1)", showParams, vec2(16, 16), vec2(396, 764)):
+      group "tabs":
+        box 356, 32
+        layout LeftToRight
+        itemSpacing 12
+        radioButton "Ships", paramTab, 0
+        radioButton "Planets", paramTab, 1
+        radioButton "Ink", paramTab, 2
+      if paramTab == 0:
+        shipsTab()
+      elif paramTab == 1:
+        planetsTab()
+      else:
+        inkTab()
+    sk.endUi()
 
 proc drawWindow() {.measure.} =
   ## Renders and presents one frame. The window size and dpi are
@@ -750,6 +915,19 @@ proc drawWindow() {.measure.} =
     vec2(float32(frame.width), float32(frame.height))
   ))
   bxy.endFrame()
+  when not defined(emscripten):
+    drawParamsPanel(windowSize)
+  when defined(glShotDebug):
+    inc glShotFrames
+    if glShotFrames == 120:
+      let shot = newImage(windowSize.x, windowSize.y)
+      glBindFramebuffer(GL_FRAMEBUFFER, 0)
+      glReadPixels(0, 0, windowSize.x, windowSize.y,
+        GL_RGBA, GL_UNSIGNED_BYTE, addr shot.data[0])
+      shot.flipVertical()
+      shot.writeFile("tmp/glshot.png")
+      echo "saved tmp/glshot.png"
+      quit(0)
   window.swapBuffers()
 
 startProfileTrace()

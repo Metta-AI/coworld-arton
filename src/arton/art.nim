@@ -12,6 +12,29 @@ const
   InkW = WorldWidth.int32
   InkH = WorldHeight.int32
 
+type
+  ArtParams* = object
+    ## Every live tunable of the art mode, scrubbed from the F1
+    ## panel. Ship values are read by the splat queueing in arton.
+    velDamp*, speedCap*, fadeKeep*, fadeSubK*, burstPush*: float32
+    inkSat*, inkVal*, paperMix*: float32
+    planetSat*, planetVal*, spinSpeed*, washout*, specular*: float32
+    jitterInner*, jitterShell*, shellScale*, shellMissing*: float32
+    ringInner*, ringOuter*: float32
+    trailEvery*, trailSize*, trailAmount*, trailDrag*: float32
+    deathSize*, deathAmount*, captureSize*, captureAmount*: float32
+
+var artParams* = ArtParams(
+  velDamp: 0.985, speedCap: 3.0, fadeKeep: 0.9984, fadeSubK: 0.4,
+  burstPush: 8.8, inkSat: 0.85, inkVal: 0.75, paperMix: 0.25,
+  planetSat: 0.8, planetVal: 0.85, spinSpeed: 1.0, washout: 0.9,
+  specular: 0.35, jitterInner: 0.13, jitterShell: 0.234,
+  shellScale: 1.21, shellMissing: 0.6, ringInner: 1.42,
+  ringOuter: 1.46,
+  trailEvery: 9, trailSize: 8, trailAmount: 0.5, trailDrag: 3.0,
+  deathSize: 48, deathAmount: 4.0, captureSize: 240,
+  captureAmount: 4.0)
+
 var
   statePrev: Uniform[Sampler2d]
   paperTex: Uniform[Sampler2d]
@@ -25,6 +48,16 @@ var
   mvp: Uniform[Mat4]
   modelRot: Uniform[Mat4]
   ownerColor: Uniform[Vec3]
+  velDamp: Uniform[float32]
+  speedCap: Uniform[float32]
+  fadeMul: Uniform[float32]
+  fadeSub: Uniform[float32]
+  pushStrength: Uniform[float32]
+  colorSat: Uniform[float32]
+  colorVal: Uniform[float32]
+  paperMix: Uniform[float32]
+  planetSpec: Uniform[float32]
+  planetWash: Uniform[float32]
 
 proc inkG(x: Vec2): float32 =
   exp(-dot(x, x))
@@ -85,14 +118,14 @@ proc artSimFrag(fragColor: var Vec4, uv: Vec2) =
   # State w stores hue times mass, so plain linear diffusion and
   # texture filtering stay color correct at any density.
   var state = acc / wsum
-  state.x = accVel.x / velWsum * 0.985'f32
-  state.y = accVel.y / velWsum * 0.985'f32
+  state.x = accVel.x / velWsum * velDamp
+  state.y = accVel.y / velWsum * velDamp
   let speed = length(vec2(state.x, state.y))
-  if speed > 3.0'f32:
-    state.x = state.x * 3.0'f32 / speed
-    state.y = state.y * 3.0'f32 / speed
+  if speed > speedCap:
+    state.x = state.x * speedCap / speed
+    state.y = state.y * speedCap / speed
   let zBefore = state.z
-  state.z = max(state.z * 0.9984'f32 - 0.0004'f32, 0.0'f32)
+  state.z = max(state.z * fadeMul - fadeSub, 0.0'f32)
   # Hue mass scales with the mass it belongs to.
   state.w = state.w * state.z / max(zBefore, 0.0001'f32)
   fragColor = state
@@ -120,7 +153,7 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
         state.y = state.y + splatVel.y * m
       else:
         let away = pos - splatPos + vec2(0.001, 0.001)
-        let push = normalize(away) * m * 8.8'f32
+        let push = normalize(away) * m * pushStrength
         state.x = state.x + push.x
         state.y = state.y + push.y
   fragColor = state
@@ -142,12 +175,13 @@ proc artDrawFrag(fragColor: var Vec4, uv: Vec2) =
   let a = pow(sstep(0.0'f32, 1.0'f32, rho), 0.1'f32)
   let b = exp(-1.7'f32 * sstep(0.5'f32, 3.75'f32, rho))
   let hue = state.w / max(rho, 0.0001'f32)
-  let fcol = hsvToRgb(vec3(hue, 0.85'f32, 0.75'f32))
+  let fcol = hsvToRgb(vec3(hue, colorSat, colorVal))
   var col = vec3(3.0, 3.0, 3.0)
   col = mixN(col, fcol * (1.5'f32 * b + specular * 5.0'f32), a)
   col = tanh3(col)
   let paper = texture(paperTex, vec2(uv.x, 1.0'f32 - uv.y))
-  col = col * (paper.xyz * 0.25'f32 + vec3(0.75, 0.75, 0.75))
+  let keep = 1.0'f32 - paperMix
+  col = col * (paper.xyz * paperMix + vec3(keep, keep, keep))
   fragColor = vec4(col.x, col.y, col.z, 1.0)
 
 ## The 3d planet orbs, ported from experiments/sphere.nim: a solid
@@ -179,7 +213,7 @@ proc planetFrag(
   let l = norm3(vec3(0.15, 1.0, 0.45))
   let d = abs(dot(n, l))
   let h = norm3(l + vec3(0.0, 0.0, 1.0))
-  let sp = pow(abs(dot(n, h)), 24.0'f32) * 0.35'f32
+  let sp = pow(abs(dot(n, h)), 24.0'f32) * planetSpec
   var shade = 0.3'f32 + 0.75'f32 * d
   var base = vec3(vVariant, vVariant, vVariant)
   if vVariant > 1.5'f32:
@@ -195,7 +229,7 @@ proc planetFrag(
   var outC = base * shade
   if vVariant < 1.5'f32:
     # Faces square to the light wash out to full white.
-    let wl = pow(d, 2.5'f32) * 0.9'f32
+    let wl = pow(d, 2.5'f32) * planetWash
     outC = outC * (1.0'f32 - wl) + vec3(1.0, 1.0, 1.0) * wl
   fragColor = vec4(
     outC.x + sp, outC.y + sp, outC.z + sp, 1.0)
@@ -222,6 +256,7 @@ type
     current: int
     vao, vbo: GLuint
     orbCache: Table[int32, PlanetSet]
+    meshStamp: array[6, float32]
     paper: GLuint
     brushes: seq[GLuint]
     queue*: seq[Splat]
@@ -392,16 +427,34 @@ proc uploadPlanetMesh(art: var ArtState, data: seq[float32]): PlanetMesh =
         cast[pointer](spec[2]))
   result.vertCount = GLsizei(data.len div 8)
 
+proc meshParamStamp(): array[6, float32] =
+  [artParams.jitterInner, artParams.jitterShell,
+    artParams.shellScale, artParams.shellMissing,
+    artParams.ringInner, artParams.ringOuter]
+
+proc dropOrbCache(art: var ArtState) =
+  ## Frees every cached planet mesh so the next frame rebuilds them
+  ## with the current mesh params.
+  for id, meshes in art.orbCache:
+    for mesh in [meshes.inner, meshes.outer, meshes.ring]:
+      var vao = mesh.vao
+      var vbo = mesh.vbo
+      glDeleteVertexArrays(1, addr vao)
+      glDeleteBuffers(1, addr vbo)
+  art.orbCache.clear()
+
 proc planetMeshes(art: var ArtState, id: int32): PlanetSet =
   ## Cached per planet meshes, sphere.nim settings, seeded by id.
   if id in art.orbCache:
     return art.orbCache[id]
   let seed = int64(id) * 977 + 12345
   result.inner = art.uploadPlanetMesh(
-    buildOrb(0.0, 0.44, seed, 1.0, 0.13))
+    buildOrb(0.0, 0.44, seed, 1.0, artParams.jitterInner))
   result.outer = art.uploadPlanetMesh(
-    buildOrb(0.6, 0.44, seed + 7, 1.21, 0.234))
-  result.ring = art.uploadPlanetMesh(buildRing(1.42, 1.46))
+    buildOrb(artParams.shellMissing, 0.44, seed + 7,
+      artParams.shellScale, artParams.jitterShell))
+  result.ring = art.uploadPlanetMesh(
+    buildRing(artParams.ringInner, artParams.ringOuter))
   art.orbCache[id] = result
 
 proc initArt*(): ArtState =
@@ -479,6 +532,16 @@ proc fullscreenPass(
   glUniform1f(uniformLoc(program, "splatSize"), splat.size)
   glUniform1f(uniformLoc(program, "splatAngle"), angle)
   glUniform2f(uniformLoc(program, "splatVel"), splat.vx, splat.vy)
+  glUniform1f(uniformLoc(program, "velDamp"), artParams.velDamp)
+  glUniform1f(uniformLoc(program, "speedCap"), artParams.speedCap)
+  glUniform1f(uniformLoc(program, "fadeMul"), artParams.fadeKeep)
+  glUniform1f(
+    uniformLoc(program, "fadeSub"), artParams.fadeSubK / 1000.0)
+  glUniform1f(
+    uniformLoc(program, "pushStrength"), artParams.burstPush)
+  glUniform1f(uniformLoc(program, "colorSat"), artParams.inkSat)
+  glUniform1f(uniformLoc(program, "colorVal"), artParams.inkVal)
+  glUniform1f(uniformLoc(program, "paperMix"), artParams.paperMix)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc queueSplat*(
@@ -560,6 +623,13 @@ proc frame*(
   glEnable(GL_DEPTH_TEST)
   glClear(GL_DEPTH_BUFFER_BIT)
   glUseProgram(art.planetProgram)
+  if art.meshStamp != meshParamStamp():
+    art.meshStamp = meshParamStamp()
+    art.dropOrbCache()
+  glUniform1f(
+    uniformLoc(art.planetProgram, "planetSpec"), artParams.specular)
+  glUniform1f(
+    uniformLoc(art.planetProgram, "planetWash"), artParams.washout)
   let proj = ortho(
     0.0'f32, float32(WorldWidth), float32(WorldHeight), 0.0'f32,
     -200.0'f32, 200.0'f32)
@@ -581,12 +651,12 @@ proc frame*(
         if hue < 0:
           vec3(0.62, 0.60, 0.58)
         else:
-          hsvToRgb(vec3(hue, 0.8'f32, 0.85'f32))
+          hsvToRgb(vec3(hue, artParams.planetSat, artParams.planetVal))
     glUniform3f(
       uniformLoc(art.planetProgram, "ownerColor"),
       color.x, color.y, color.z)
 
-    let tf = float32(time)
+    let tf = float32(time) * artParams.spinSpeed
     drawOne(art.planetProgram, meshes.inner,
       base * rotateY(0.35'f32 * rateK * tf + seed) *
       rotateX(0.35'f32), proj)
