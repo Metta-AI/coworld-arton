@@ -31,7 +31,7 @@ var artParams* = ArtParams(
   specular: 0.35, jitterInner: 0.13, jitterShell: 0.234,
   shellScale: 1.21, shellMissing: 0.6, ringInner: 1.42,
   ringOuter: 1.46,
-  trailEvery: 9, trailSize: 8, trailAmount: 0.5, trailDrag: 3.0,
+  trailEvery: 9, trailSize: 16, trailAmount: 0.5, trailDrag: 3.0,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
   captureAmount: 4.0)
 
@@ -248,6 +248,8 @@ type
     size*: float32
     amount*: float32
     vx*, vy*: float32
+    angle*: float32
+    ship*: bool
 
   ArtState* = object
     simProgram, injectProgram, drawProgram, planetProgram: GLuint
@@ -259,6 +261,7 @@ type
     meshStamp: array[6, float32]
     paper: GLuint
     brushes: seq[GLuint]
+    shipBrush: GLuint
     queue*: seq[Splat]
 
 proc compileShader(kind: GLenum, source: string): GLuint =
@@ -301,22 +304,50 @@ proc makeStateTexture(): GLuint =
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
 
-proc loadTexture(path: string, red: bool): GLuint =
-  ## Loads a png. Red means single channel ink amount, black is ink.
-  let image = readImage(path)
+proc inkTexture(image: Image): GLuint =
+  ## Single channel ink amount texture from an image, black is ink.
   glGenTextures(1, addr result)
   glBindTexture(GL_TEXTURE_2D, result)
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+  var ink = newString(image.width * image.height)
+  for i in 0 ..< image.width * image.height:
+    ink[i] = char(255 - image.data[i].r)
+  glTexImage2D(
+    GL_TEXTURE_2D, 0, GLint(GL_R8),
+    GLsizei(image.width), GLsizei(image.height), 0,
+    GL_RED, GL_UNSIGNED_BYTE, ink.cstring
+  )
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
+
+proc shipBrushTexture(): GLuint =
+  ## The overlay ship V as an ink stamp, nose pointing plus x, so a
+  ## trail stamp rotated by the ship heading inks its exact shape.
+  let image = newImage(64, 64)
+  image.fill(rgba(255, 255, 255, 255))
+  let ctx = newContext(image)
+  ctx.translate(vec2(32, 32))
+  ctx.scale(vec2(3.0, 3.0))
+  ctx.strokeStyle = rgba(0, 0, 0, 255)
+  ctx.lineWidth = 3
+  let path = newPath()
+  path.moveTo(-6, -5)
+  path.lineTo(8, 0)
+  path.lineTo(-6, 5)
+  ctx.stroke(path)
+  return inkTexture(image)
+
+proc loadTexture(path: string, red: bool): GLuint =
+  ## Loads a png. Red means single channel ink amount, black is ink.
+  let image = readImage(path)
   if red:
-    var ink = newString(image.width * image.height)
-    for i in 0 ..< image.width * image.height:
-      ink[i] = char(255 - image.data[i].r)
-    glTexImage2D(
-      GL_TEXTURE_2D, 0, GLint(GL_R8),
-      GLsizei(image.width), GLsizei(image.height), 0,
-      GL_RED, GL_UNSIGNED_BYTE, ink.cstring
-    )
-  else:
+    return inkTexture(image)
+  glGenTextures(1, addr result)
+  glBindTexture(GL_TEXTURE_2D, result)
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+  block:
     glTexImage2D(
       GL_TEXTURE_2D, 0, GLint(GL_RGBA8),
       GLsizei(image.width), GLsizei(image.height), 0,
@@ -500,6 +531,7 @@ proc initArt*(): ArtState =
   for path in paths:
     result.brushes.add(loadTexture(path, red = true))
   doAssert result.brushes.len > 0, "no splat brushes found"
+  result.shipBrush = shipBrushTexture()
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -546,14 +578,17 @@ proc fullscreenPass(
 
 proc queueSplat*(
   art: var ArtState, x, y, hue, size: float32,
-  amount = 4.0'f32, vx = 0.0'f32, vy = 0.0'f32
+  amount = 4.0'f32, vx = 0.0'f32, vy = 0.0'f32,
+  angle = 0.0'f32, ship = false
 ) =
   ## World position splat, queued for the next frame's inject
   ## passes. A velocity makes it a directed trail stain instead of
-  ## an outward burst. The y axis flips into canvas space.
+  ## an outward burst. Ship splats stamp the ship V brush at the
+  ## given world heading angle instead of a random splatter brush.
+  ## The y axis flips into canvas space.
   art.queue.add(Splat(
     x: x, y: float32(WorldHeight) - y, hue: hue, size: size,
-    amount: amount, vx: vx, vy: -vy))
+    amount: amount, vx: vx, vy: -vy, angle: angle, ship: ship))
 
 proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
   ## One planet mesh with its own model matrix.
@@ -588,19 +623,29 @@ proc frame*(
     noSplat, 0.0, 0.0, viewport)
   art.current = 1 - art.current
 
-  # Inject queued splats, up to a sane cap per frame.
+  # Inject queued splats, up to a sane cap per frame. The cap is
+  # high enough that every ship trailing every tick still lands.
   var injected = 0
-  while art.queue.len > 0 and injected < 16:
+  while art.queue.len > 0 and injected < 64:
     let splat = art.queue[0]
     art.queue.delete(0)
     glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
     glFramebufferTexture2D(
       GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
       art.stateTex[1 - art.current], 0)
+    let brush =
+      if splat.ship:
+        art.shipBrush
+      else:
+        art.brushes[rand(art.brushes.len - 1)]
+    let angle =
+      if splat.ship:
+        splat.angle
+      else:
+        rand(6.28318'f32)
     art.fullscreenPass(
       art.injectProgram, art.fbo, art.stateTex[art.current],
-      art.brushes[rand(art.brushes.len - 1)],
-      splat, splat.amount, rand(6.28318'f32), viewport)
+      brush, splat, splat.amount, angle, viewport)
     art.current = 1 - art.current
     inc injected
 

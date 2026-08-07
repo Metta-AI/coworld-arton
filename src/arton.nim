@@ -744,20 +744,24 @@ proc stepSim() =
           fired.add(key)
       for key in fired:
         pendingCaptures.del(key)
-      # Ships drag the ink with them and leave a faint stain of
-      # their color, staggered by age so the queue stays sane.
+      # Ships stamp their own V shape at their heading, dragging the
+      # ink with them, staggered by age so the queue stays sane. The
+      # residue is every - 1 so a cadence of one splats every tick.
       for ship in sim.ships:
         let every = max(int32(artParams.trailEvery), 1)
-        if ship.age mod every == 3 and artState.queue.len < 48:
-          artState.queueSplat(
-            float32(ship.x div SubpixelScale),
-            float32(ship.y div SubpixelScale),
-            playerHue(ship.ownerId) / 360.0, artParams.trailSize,
-            amount = artParams.trailAmount,
-            vx = float32(cos256(ship.heading)) / 4096.0 *
-              artParams.trailDrag,
-            vy = float32(sin256(ship.heading)) / 4096.0 *
-              artParams.trailDrag)
+        if ship.age mod every == every - 1 and
+          artState.queue.len < 256:
+            artState.queueSplat(
+              float32(ship.x div SubpixelScale),
+              float32(ship.y div SubpixelScale),
+              playerHue(ship.ownerId) / 360.0, artParams.trailSize,
+              amount = artParams.trailAmount,
+              vx = float32(cos256(ship.heading)) / 4096.0 *
+                artParams.trailDrag,
+              vy = float32(sin256(ship.heading)) / 4096.0 *
+                artParams.trailDrag,
+              angle = float32(ship.heading) * 2.0'f32 * PI / 256.0'f32,
+              ship = true)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
