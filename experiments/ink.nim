@@ -14,7 +14,7 @@
 
 import
   std/[algorithm, os, random, strutils, times],
-  opengl, pixie, shady, vmath, windy
+  opengl, pixie, shady, silky, vmath, windy
 
 const
   SimWidth = 1024
@@ -30,6 +30,11 @@ var
   splatAmount: Uniform[float32]
   splatSize: Uniform[float32]
   splatAngle: Uniform[float32]
+  fadeMul: Uniform[float32]
+  fadeSub: Uniform[float32]
+  velDamp: Uniform[float32]
+  speedCap: Uniform[float32]
+  pushStrength: Uniform[float32]
 
 ## Helper functions compiled into the shaders. Custom names so they
 ## never collide with GLSL builtins.
@@ -119,14 +124,14 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
   # speed keeps the explosion from diluting the ink into nothing.
   # Ink fades away over time, the exponential part thins heavy pools
   # and the linear part makes even the last faint stain reach zero,
-  # so the page always clears back to white.
-  state.x = state.x * 0.985'f32
-  state.y = state.y * 0.985'f32
+  # so the page always clears back to white. All tunable in the UI.
+  state.x = state.x * velDamp
+  state.y = state.y * velDamp
   let speed = length(vec2(state.x, state.y))
-  if speed > 3.0'f32:
-    state.x = state.x * 3.0'f32 / speed
-    state.y = state.y * 3.0'f32 / speed
-  state.z = max(state.z * 0.997'f32 - 0.0004'f32, 0.0'f32)
+  if speed > speedCap:
+    state.x = state.x * speedCap / speed
+    state.y = state.y * speedCap / speed
+  state.z = max(state.z * fadeMul - fadeSub, 0.0'f32)
 
   # Splat: stamp the current splatter brush texture, rotated and
   # scaled, adding mass where the brush has ink. Hue blends by mass
@@ -149,7 +154,7 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
         # the brush is dark since m carries the brush ink sample, so
         # the ink explodes outward from the stamp shape.
         let away = pos - splatPos + vec2(0.001, 0.001)
-        let push = normalize(away) * m * 3.0'f32
+        let push = normalize(away) * m * pushStrength
         state.x = state.x + push.x
         state.y = state.y + push.y
 
@@ -266,6 +271,17 @@ let window = newWindow(
 makeContextCurrent(window)
 loadExtensions()
 
+# Silky UI, reusing the widget skins and font from the silky
+# basicwindow example atlas data.
+const SilkyData = "../silky/examples/basicwindow/data/"
+let builder = newAtlasBuilder(1024, 4)
+builder.addDir(SilkyData, SilkyData)
+builder.addFont(SilkyData & "IBMPlexSans-Regular.ttf", "H1", 32.0)
+builder.addFont(SilkyData & "IBMPlexSans-Regular.ttf", "Default", 18.0)
+createDir("tmp")
+builder.write("tmp/ink_atlas.png")
+let sk = newSilky(window, "tmp/ink_atlas.png")
+
 # The splatter brush set, extracted from the abr by gen_splats.
 var splatTextures: seq[GLuint]
 block:
@@ -325,6 +341,15 @@ var
   frameCount = 0
   shotPath = ""
   shotFrames = 300
+  # The key sim parameters, draggable in the UI panel.
+  showParams = true
+  paramSize = 57.0'f32
+  paramAmount = 4.0'f32
+  paramPush = 3.0'f32
+  paramDamp = 0.985'f32
+  paramSpeedCap = 3.0'f32
+  paramFadeKeep = 0.997'f32
+  paramFadeSub = 0.4'f32
 
 currentSplat = splatTextures[0]
 
@@ -365,15 +390,23 @@ proc queueSplat(pos: Vec2, amount: float32) =
   pendingPos = vec2(pos.x, float32(SimHeight) - pos.y)
   pendingAmount = amount
 
+proc mouseOnUi(): bool =
+  ## True while the mouse should go to the UI, not the paper.
+  if sk.interactor.hotId != -1:
+    return true
+  let m = window.mousePos.vec2
+  return showParams and m.x >= 8 and m.x <= 372 and
+    m.y >= 8 and m.y <= 500
+
 window.onButtonPress = proc(button: Button) =
-  if button == MouseLeft:
+  if button == MouseLeft and not mouseOnUi():
     # A new color, brush, rotation and size for every click. The
     # golden ratio hue step keeps consecutive splats contrasting.
     hue = (hue + 0.61803'f32) mod 1.0'f32
     currentSplat = splatTextures[rand(splatTextures.len - 1)]
     currentAngle = rand(6.28318'f32)
-    currentSize = 37.0'f32 + rand(40.0'f32)
-    queueSplat(mouseCanvas(), 4.0)
+    currentSize = paramSize * (0.75'f32 + rand(0.5'f32))
+    queueSplat(mouseCanvas(), paramAmount)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -414,6 +447,11 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glUniform1f(uniformLoc(program, "splatAmount"), pendingAmount)
   glUniform1f(uniformLoc(program, "splatSize"), currentSize)
   glUniform1f(uniformLoc(program, "splatAngle"), currentAngle)
+  glUniform1f(uniformLoc(program, "fadeMul"), paramFadeKeep)
+  glUniform1f(uniformLoc(program, "fadeSub"), paramFadeSub / 1000.0)
+  glUniform1f(uniformLoc(program, "velDamp"), paramDamp)
+  glUniform1f(uniformLoc(program, "speedCap"), paramSpeedCap)
+  glUniform1f(uniformLoc(program, "pushStrength"), paramPush)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
@@ -432,8 +470,8 @@ window.onFrame = proc() =
   inc frameCount
 
   # Holding the mouse keeps pouring paint.
-  if window.buttonDown[MouseLeft]:
-    queueSplat(mouseCanvas(), 0.4)
+  if window.buttonDown[MouseLeft] and not mouseOnUi():
+    queueSplat(mouseCanvas(), paramAmount * 0.1)
 
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
@@ -447,6 +485,33 @@ window.onFrame = proc() =
 
   # Present pass: state -> screen.
   runPass(drawProgram, 0, stateTex[current])
+
+  # Param panel on top.
+  sk.beginUI(window, window.size)
+  subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 470)):
+    text "size label":
+      characters "splat size"
+    scrubber "size", paramSize, 20.0'f32, 300.0'f32, ""
+    text "amount label":
+      characters "splat amount"
+    scrubber "amount", paramAmount, 0.5'f32, 10.0'f32, ""
+    text "push label":
+      characters "burst push"
+    scrubber "push", paramPush, 0.0'f32, 10.0'f32, ""
+    text "damp label":
+      characters "flow damping"
+    scrubber "damp", paramDamp, 0.9'f32, 1.0'f32, ""
+    text "cap label":
+      characters "speed cap"
+    scrubber "cap", paramSpeedCap, 0.5'f32, 8.0'f32, ""
+    text "fade keep label":
+      characters "fade keep"
+    scrubber "fadeKeep", paramFadeKeep, 0.985'f32, 1.0'f32, ""
+    text "fade sub label":
+      characters "fade sub x1000"
+    scrubber "fadeSub", paramFadeSub, 0.0'f32, 2.0'f32, ""
+  sk.endUi()
+
   window.swapBuffers()
 
   if shotPath != "" and frameCount >= shotFrames:
