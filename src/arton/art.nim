@@ -27,8 +27,8 @@ type
     deathSize*, deathAmount*, captureSize*, captureAmount*: float32
 
 var artParams* = ArtParams(
-  velDamp: 0.985, speedCap: 3.0, fadeKeep: 0.9984, fadeSubK: 0.4,
-  burstPush: 8.8, inkSat: 0.85, inkVal: 0.75, paperMix: 0.25,
+  velDamp: 1.0, speedCap: 4.7, fadeKeep: 0.998, fadeSubK: 0.4,
+  burstPush: 8.8, inkSat: 1.0, inkVal: 0.84, paperMix: 0.66,
   planetSat: 1.0, planetVal: 1.0, washout: 0.45,
   spinInner: 0.61, spinOuter: 1.89,
   specular: 1.0, jitterInner: 0.035, jitterShell: 0.106,
