@@ -31,7 +31,7 @@ var artParams* = ArtParams(
   specular: 0.35, jitterInner: 0.13, jitterShell: 0.234,
   shellScale: 1.21, shellMissing: 0.6, ringInner: 1.42,
   ringOuter: 1.46,
-  trailEvery: 9, trailSize: 16, trailAmount: 0.5, trailDrag: 3.0,
+  trailEvery: 9, trailSize: 11, trailAmount: 2.53, trailDrag: 6.6,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
   captureAmount: 4.0)
 
@@ -158,6 +158,10 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
         state.y = state.y + push.y
   fragColor = state
 
+proc compositeFrag(fragColor: var Vec4, uv: Vec2) =
+  ## Draws the resolved msaa planet layer over the canvas.
+  fragColor = texture(statePrev, uv)
+
 proc artDrawFrag(fragColor: var Vec4, uv: Vec2) =
   ## Paint look over white, then the paper texture multiplied on top
   ## so the whole artwork sits on the canvas.
@@ -262,6 +266,13 @@ type
     paper: GLuint
     brushes: seq[GLuint]
     shipBrush: GLuint
+    ## The planets render into a multisampled offscreen layer that
+    ## resolves and composites over the ink, so only their triangle
+    ## edges pay for msaa.
+    compositeProgram: GLuint
+    msaaFbo, msaaColor, msaaDepth: GLuint
+    resolveFbo, resolveTex: GLuint
+    msaaSize: IVec2
     queue*: seq[Splat]
 
 proc compileShader(kind: GLenum, source: string): GLuint =
@@ -502,6 +513,9 @@ proc initArt*(): ArtState =
   result.planetProgram = makeProgram(
     toShader(planetVert, glsl3Desktop, shaderVertex),
     toShader(planetFrag, glsl3Desktop, shaderFragment))
+  result.compositeProgram = makeProgram(
+    toShader(artVert, glsl3Desktop, shaderVertex),
+    toShader(compositeFrag, glsl3Desktop, shaderFragment))
 
   var triangle = [
     (-1.0'f32, -1.0'f32), (3.0'f32, -1.0'f32), (-1.0'f32, 3.0'f32)]
@@ -603,6 +617,44 @@ proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
     cast[ptr float32](addr p))
   glDrawArrays(GL_TRIANGLES, 0, mesh.vertCount)
 
+proc ensureMsaa(art: var ArtState, size: IVec2) =
+  ## Allocates or resizes the multisampled planet layer and its
+  ## resolve target to the window size.
+  if art.msaaSize == size:
+    return
+  art.msaaSize = size
+  if art.msaaFbo == 0:
+    glGenFramebuffers(1, addr art.msaaFbo)
+    glGenRenderbuffers(1, addr art.msaaColor)
+    glGenRenderbuffers(1, addr art.msaaDepth)
+    glGenFramebuffers(1, addr art.resolveFbo)
+    glGenTextures(1, addr art.resolveTex)
+  glBindRenderbuffer(GL_RENDERBUFFER, art.msaaColor)
+  glRenderbufferStorageMultisample(
+    GL_RENDERBUFFER, 4, GL_RGBA8, size.x, size.y)
+  glBindRenderbuffer(GL_RENDERBUFFER, art.msaaDepth)
+  glRenderbufferStorageMultisample(
+    GL_RENDERBUFFER, 4, GL_DEPTH_COMPONENT24, size.x, size.y)
+  glBindFramebuffer(GL_FRAMEBUFFER, art.msaaFbo)
+  glFramebufferRenderbuffer(
+    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+    art.msaaColor)
+  glFramebufferRenderbuffer(
+    GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+    art.msaaDepth)
+  glBindTexture(GL_TEXTURE_2D, art.resolveTex)
+  glTexImage2D(
+    GL_TEXTURE_2D, 0, GLint(GL_RGBA8), size.x, size.y, 0,
+    GL_RGBA, GL_UNSIGNED_BYTE, nil)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
+  glBindFramebuffer(GL_FRAMEBUFFER, art.resolveFbo)
+  glFramebufferTexture2D(
+    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+    art.resolveTex, 0)
+
 proc frame*(
   art: var ArtState, viewport: IVec2, view: tuple[scale: float32, offset: Vec2],
   sim: Sim, hues: seq[float32], time: float64
@@ -665,8 +717,18 @@ proc frame*(
 
   # The 3d planet orbs: inner sphere, shard shell and ring per
   # planet, each with its own size and rates from the planet id.
+  # They render into their own multisampled layer so the triangle
+  # edges come out smooth, then resolve and composite over the ink.
+  art.ensureMsaa(viewport)
+  glBindFramebuffer(GL_FRAMEBUFFER, art.msaaFbo)
+  glViewport(0, 0, viewport.x, viewport.y)
+  glClearColor(0, 0, 0, 0)
   glEnable(GL_DEPTH_TEST)
-  glClear(GL_DEPTH_BUFFER_BIT)
+  glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
+  glViewport(
+    GLint(view.offset.x), GLint(view.offset.y),
+    GLsizei(float32(WorldWidth) * view.scale),
+    GLsizei(float32(WorldHeight) * view.scale))
   glUseProgram(art.planetProgram)
   if art.meshStamp != meshParamStamp():
     art.meshStamp = meshParamStamp()
@@ -711,3 +773,21 @@ proc frame*(
     drawOne(art.planetProgram, meshes.ring,
       base * rotateZ(2.0'f32 * rateK * tf + seed), proj)
   glDisable(GL_DEPTH_TEST)
+
+  # Resolve the msaa layer and blend it onto the screen.
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, art.msaaFbo)
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, art.resolveFbo)
+  glBlitFramebuffer(
+    0, 0, viewport.x, viewport.y, 0, 0, viewport.x, viewport.y,
+    GLbitfield(GL_COLOR_BUFFER_BIT), GLenum(GL_NEAREST))
+  glBindFramebuffer(GL_FRAMEBUFFER, 0)
+  glViewport(0, 0, viewport.x, viewport.y)
+  glBindVertexArray(art.vao)
+  glEnable(GL_BLEND)
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+  glUseProgram(art.compositeProgram)
+  glActiveTexture(GL_TEXTURE0)
+  glBindTexture(GL_TEXTURE_2D, art.resolveTex)
+  glUniform1i(uniformLoc(art.compositeProgram, "statePrev"), 0)
+  glDrawArrays(GL_TRIANGLES, 0, 3)
+  glDisable(GL_BLEND)
