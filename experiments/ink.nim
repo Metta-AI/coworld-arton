@@ -13,7 +13,7 @@
 ## Shaders are written in Nim and compiled to GLSL with shady.
 
 import
-  std/[os, strutils, times],
+  std/[algorithm, os, random, strutils, times],
   opengl, pixie, shady, vmath, windy
 
 const
@@ -23,11 +23,13 @@ const
 # Shader uniforms, shared by name with the GL side.
 var
   statePrev: Uniform[Sampler2d]
+  splatTex: Uniform[Sampler2d]
   resolution: Uniform[Vec2]
   splatPos: Uniform[Vec2]
   splatHue: Uniform[float32]
   splatAmount: Uniform[float32]
-  splatRadius: Uniform[float32]
+  splatSize: Uniform[float32]
+  splatAngle: Uniform[float32]
 
 ## Helper functions compiled into the shaders. Custom names so they
 ## never collide with GLSL builtins.
@@ -109,18 +111,27 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
   state.y = state.y * 0.96'f32
   state.z = max(state.z * 0.997'f32 - 0.0004'f32, 0.0'f32)
 
-  # Splat: add mass, blend hue by mass, and push flow outward so the
-  # paint blooms before it settles.
-  let d = (pos - splatPos) / splatRadius
-  let m = splatAmount * inkG(d)
-  if m > 0.0001'f32:
-    let total = state.z + m
-    state.w = (state.w * state.z + splatHue * m) / max(total, 0.0001'f32)
-    state.z = total
-    let away = pos - splatPos + vec2(0.001, 0.001)
-    let push = normalize(away) * m * 5.0'f32
-    state.x = state.x + push.x
-    state.y = state.y + push.y
+  # Splat: stamp the current splatter brush texture, rotated and
+  # scaled, adding mass where the brush has ink. Hue blends by mass
+  # and the flow gets a small outward push so the paint blooms.
+  if splatAmount > 0.0'f32:
+    let rel = (pos - splatPos) / splatSize
+    let cA = cos(splatAngle)
+    let sA = sin(splatAngle)
+    let q = vec2(rel.x * cA - rel.y * sA, rel.x * sA + rel.y * cA) +
+      0.5'f32
+    if q.x > 0.0'f32 and q.x < 1.0'f32 and
+      q.y > 0.0'f32 and q.y < 1.0'f32:
+      let m = splatAmount * texture(splatTex, q).x
+      if m > 0.0001'f32:
+        let total = state.z + m
+        state.w = (state.w * state.z + splatHue * m) /
+          max(total, 0.0001'f32)
+        state.z = total
+        let away = pos - splatPos + vec2(0.001, 0.001)
+        let push = normalize(away) * m * 2.0'f32
+        state.x = state.x + push.x
+        state.y = state.y + push.y
 
   fragColor = state
 
@@ -190,6 +201,28 @@ proc makeProgram(vertSrc, fragSrc: string): GLuint =
     glGetProgramInfoLog(result, length, nil, log.cstring)
     quit "shader link failed:\n" & log
 
+proc loadSplatTexture(path: string): GLuint =
+  ## Loads one black on white splatter png as a single channel ink
+  ## texture, where 1 means full ink.
+  let image = readImage(path)
+  var ink = newString(image.width * image.height)
+  for i in 0 ..< image.width * image.height:
+    ink[i] = char(255 - image.data[i].r)
+  glGenTextures(1, addr result)
+  glBindTexture(GL_TEXTURE_2D, result)
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+  glTexImage2D(
+    GL_TEXTURE_2D, 0, GLint(GL_R8),
+    GLsizei(image.width), GLsizei(image.height), 0,
+    GL_RED, GL_UNSIGNED_BYTE, ink.cstring
+  )
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_LINEAR))
+  glTexParameteri(
+    GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
+  glTexParameteri(
+    GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
+
 proc makeStateTexture(): GLuint =
   ## One RGBA32F sim buffer, linear filtered for smooth advection.
   glGenTextures(1, addr result)
@@ -212,6 +245,18 @@ let window = newWindow(
 )
 makeContextCurrent(window)
 loadExtensions()
+
+# The splatter brush set, extracted from the abr by gen_splats.
+var splatTextures: seq[GLuint]
+block:
+  var paths: seq[string]
+  for path in walkFiles("experiments/data/splats/*.png"):
+    paths.add(path)
+  paths.sort()
+  for path in paths:
+    splatTextures.add(loadSplatTexture(path))
+doAssert splatTextures.len > 0, "no splat pngs found, run gen_splats"
+randomize()
 
 let
   simProgram = makeProgram(
@@ -254,9 +299,14 @@ var
   hue = 0.08'f32
   pendingAmount = 0.0'f32
   pendingPos = vec2(0, 0)
+  currentSplat: GLuint
+  currentSize = 220.0'f32
+  currentAngle = 0.0'f32
   frameCount = 0
   shotPath = ""
   shotFrames = 300
+
+currentSplat = splatTextures[0]
 
 for param in commandLineParams():
   if param.startsWith("--shot="):
@@ -271,10 +321,13 @@ proc queueSplat(pos: Vec2, amount: float32) =
 
 window.onButtonPress = proc(button: Button) =
   if button == MouseLeft:
-    # A new color for every click, stepping the wheel by the golden
-    # ratio so consecutive splats always contrast.
+    # A new color, brush, rotation and size for every click. The
+    # golden ratio hue step keeps consecutive splats contrasting.
     hue = (hue + 0.61803'f32) mod 1.0'f32
-    queueSplat(window.mousePos.vec2, 6.0)
+    currentSplat = splatTextures[rand(splatTextures.len - 1)]
+    currentAngle = rand(6.28318'f32)
+    currentSize = 150.0'f32 + rand(160.0'f32)
+    queueSplat(window.mousePos.vec2, 2.5)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -290,7 +343,10 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glUseProgram(program)
   glActiveTexture(GL_TEXTURE0)
   glBindTexture(GL_TEXTURE_2D, sourceTex)
+  glActiveTexture(GL_TEXTURE1)
+  glBindTexture(GL_TEXTURE_2D, currentSplat)
   glUniform1i(uniformLoc(program, "statePrev"), 0)
+  glUniform1i(uniformLoc(program, "splatTex"), 1)
   glUniform2f(
     uniformLoc(program, "resolution"),
     float32(SimWidth), float32(SimHeight)
@@ -299,7 +355,8 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
     uniformLoc(program, "splatPos"), pendingPos.x, pendingPos.y)
   glUniform1f(uniformLoc(program, "splatHue"), hue)
   glUniform1f(uniformLoc(program, "splatAmount"), pendingAmount)
-  glUniform1f(uniformLoc(program, "splatRadius"), 9.0)
+  glUniform1f(uniformLoc(program, "splatSize"), currentSize)
+  glUniform1f(uniformLoc(program, "splatAngle"), currentAngle)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
@@ -319,7 +376,7 @@ window.onFrame = proc() =
 
   # Holding the mouse keeps pouring paint.
   if window.buttonDown[MouseLeft]:
-    queueSplat(window.mousePos.vec2, 1.5)
+    queueSplat(window.mousePos.vec2, 0.4)
 
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
