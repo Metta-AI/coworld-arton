@@ -498,7 +498,7 @@ window.onFrame = proc() =
     text "size label":
       characters "splat size"
     scrubber "size", paramSize, 20.0'f32, 300.0'f32,
-      formatFloat(paramSize, ffDecimal, 0)
+      $int(paramSize)
     text "amount label":
       characters "splat amount"
     scrubber "amount", paramAmount, 0.5'f32, 10.0'f32,
