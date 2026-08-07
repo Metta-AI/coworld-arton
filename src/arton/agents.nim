@@ -223,11 +223,12 @@ proc step*(agent: Agent, sim: var Sim) {.measure.} =
   try:
     if agent.vm.vm.isFinished:
       agent.vm.vm.load(agent.tickAst)
-    var ops = 0
-    while ops < agentOpsPerTurn and not agent.vm.vm.isFinished:
-      agent.vm.vm.step()
-      inc ops
-      inc agent.ops
+    profileBlock "nimmy vm":
+      var ops = 0
+      while ops < agentOpsPerTurn and not agent.vm.vm.isFinished:
+        agent.vm.vm.step()
+        inc ops
+        inc agent.ops
     agent.vm.vm.clearOutput()
   except CatchableError as e:
     agent.failed = true
