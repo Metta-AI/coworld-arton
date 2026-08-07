@@ -35,6 +35,9 @@ var
   velDamp: Uniform[float32]
   speedCap: Uniform[float32]
   pushStrength: Uniform[float32]
+  erasePos: Uniform[Vec2]
+  eraseAmount: Uniform[float32]
+  eraseRadius: Uniform[float32]
 
 ## Helper functions compiled into the shaders. Custom names so they
 ## never collide with GLSL builtins.
@@ -132,6 +135,17 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
     state.x = state.x * speedCap / speed
     state.y = state.y * speedCap / speed
   state.z = max(state.z * fadeMul - fadeSub, 0.0'f32)
+
+  # Eraser: a little fuzzy circle that cuts ink out of the paint.
+  # It also stills the flow where it cuts, so paint does not rush
+  # straight back into the hole.
+  if eraseAmount > 0.0'f32:
+    let ed = (pos - erasePos) / eraseRadius
+    let cut = eraseAmount * inkG(ed)
+    state.z = max(state.z - cut, 0.0'f32)
+    let still = 1.0'f32 - clamp(cut, 0.0'f32, 1.0'f32)
+    state.x = state.x * still
+    state.y = state.y * still
 
   # Splat: stamp the current splatter brush texture, rotated and
   # scaled, adding mass where the brush has ink. Hue blends by mass
@@ -335,6 +349,8 @@ var
   hue = 0.08'f32
   pendingAmount = 0.0'f32
   pendingPos = vec2(0, 0)
+  pendingErase = 0.0'f32
+  pendingErasePos = vec2(0, 0)
   currentSplat: GLuint
   currentSize = 220.0'f32
   currentAngle = 0.0'f32
@@ -458,6 +474,10 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glUniform1f(uniformLoc(program, "velDamp"), paramDamp)
   glUniform1f(uniformLoc(program, "speedCap"), paramSpeedCap)
   glUniform1f(uniformLoc(program, "pushStrength"), paramPush)
+  glUniform2f(
+    uniformLoc(program, "erasePos"), pendingErasePos.x, pendingErasePos.y)
+  glUniform1f(uniformLoc(program, "eraseAmount"), pendingErase)
+  glUniform1f(uniformLoc(program, "eraseRadius"), 18.0)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
@@ -479,6 +499,14 @@ window.onFrame = proc() =
   if window.buttonDown[MouseLeft] and not mouseOnUi():
     queueSplat(mouseCanvas(), paramAmount * 0.1)
 
+  # Right button drags a little fuzzy eraser circle through the
+  # paint.
+  if window.buttonDown[MouseRight] and not mouseOnUi():
+    let pos = mouseCanvas()
+    if onCanvas(pos):
+      pendingErasePos = vec2(pos.x, float32(SimHeight) - pos.y)
+      pendingErase = 1.5
+
   # Sim pass: current state -> other buffer.
   glBindFramebuffer(GL_FRAMEBUFFER, fbo)
   glFramebufferTexture2D(
@@ -488,6 +516,7 @@ window.onFrame = proc() =
   runPass(simProgram, fbo, stateTex[current])
   current = 1 - current
   pendingAmount = 0.0
+  pendingErase = 0.0
 
   # Present pass: state -> screen.
   runPass(drawProgram, 0, stateTex[current])
