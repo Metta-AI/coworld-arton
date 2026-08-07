@@ -643,6 +643,7 @@ window.onButtonRelease = proc(button: Button) =
     # clears the selection.
     selected = @[]
 
+let appStart = epochTime()
 var
   lastTime = epochTime()
   accumulator = 0.0
@@ -713,7 +714,7 @@ proc drawWindow() {.measure.} =
     var hues: seq[float32]
     for player in sim.players:
       hues.add(playerHue(player.id) / 360.0)
-    artState.frame(windowSize, view, sim, hues, epochTime())
+    artState.frame(windowSize, view, sim, hues, epochTime() - appStart)
   let frame = sim.renderFrame(
     selected,
     boxRectNow(pos),
