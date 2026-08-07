@@ -176,6 +176,19 @@ proc strokeColor(ownerId: int32): ColorRGBA =
     return hsv(playerHue(ownerId), 82, 76).color.rgba
   return hsv(playerHue(ownerId), 95, 52).color.rgba
 
+let shipImage = readImage("data/ship.png")
+var shipSprites: Table[int32, Image]
+
+proc shipSprite(ownerId: int32): Image =
+  ## The ship sprite tinted with the owner's color, cached. The
+  ## sprite alpha masks a solid fill of the owner color.
+  if ownerId in shipSprites:
+    return shipSprites[ownerId]
+  result = newImage(shipImage.width, shipImage.height)
+  result.fill(strokeColor(ownerId))
+  result.draw(shipImage, blendMode = MaskBlend)
+  shipSprites[ownerId] = result
+
 proc offenseFactor(sim: Sim, playerId: int32): int32 =
   ## Reads a player's offense factor.
   for player in sim.players:
@@ -316,15 +329,8 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       angle = float32(ship.heading) * 2.0'f * PI / 256.0'f
     ctx.save()
     ctx.translate(vec2(x, y))
-    ctx.rotate(angle)
-    ctx.strokeStyle = strokeColor(ship.ownerId)
-    ctx.lineWidth = 2
-    # An open V pointing at the target, wings swept back.
-    let path = newPath()
-    path.moveTo(-6, -5)
-    path.lineTo(8, 0)
-    path.lineTo(-6, 5)
-    ctx.stroke(path)
+    ctx.rotate(angle + float32(PI) / 2)
+    ctx.drawImage(shipSprite(ship.ownerId), -10, -10, 20, 20)
     ctx.restore()
 
   ctx.fillStyle = HudColor
@@ -724,6 +730,7 @@ let appStart = epochTime()
 var
   lastTime = epochTime()
   accumulator = 0.0
+  inkAccumulator = 0.0
 
 proc stepSim() =
   ## Advances the sim on a fixed timestep from real elapsed time,
@@ -929,7 +936,14 @@ proc drawWindow() {.measure.} =
     var hues: seq[float32]
     for player in sim.players:
       hues.add(playerHue(player.id) / 360.0)
-    artState.frame(windowSize, view, sim, hues, epochTime() - appStart)
+    # The ink flows at game speed: two sim passes per frame at 1x,
+    # scaled by the multiplier, fractional passes carrying over.
+    inkAccumulator += 2.0 * speedMultiplier
+    var inkSteps = int(inkAccumulator)
+    inkAccumulator -= float64(inkSteps)
+    inkSteps = min(inkSteps, 32)
+    artState.frame(
+      windowSize, view, sim, hues, epochTime() - appStart, inkSteps)
   let frame = sim.renderFrame(
     selected,
     boxRectNow(pos),

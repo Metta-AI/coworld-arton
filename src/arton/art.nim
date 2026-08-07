@@ -337,20 +337,17 @@ proc inkTexture(image: Image): GLuint =
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
 
 proc shipBrushTexture(): GLuint =
-  ## The overlay ship V as an ink stamp, nose pointing plus x, so a
+  ## The ship sprite as an ink stamp, rotated nose to plus x, so a
   ## trail stamp rotated by the ship heading inks its exact shape.
-  let image = newImage(64, 64)
+  let sprite = readImage("data/ship.png")
+  let half = vec2(
+    float32(sprite.width) / 2, float32(sprite.height) / 2)
+  let image = newImage(sprite.width, sprite.height)
   image.fill(rgba(255, 255, 255, 255))
   let ctx = newContext(image)
-  ctx.translate(vec2(32, 32))
-  ctx.scale(vec2(3.0, 3.0))
-  ctx.strokeStyle = rgba(0, 0, 0, 255)
-  ctx.lineWidth = 3
-  let path = newPath()
-  path.moveTo(-6, -5)
-  path.lineTo(8, 0)
-  path.lineTo(-6, 5)
-  ctx.stroke(path)
+  ctx.translate(half)
+  ctx.rotate(float32(PI) / 2)
+  ctx.drawImage(sprite, -half.x, -half.y)
   return inkTexture(image)
 
 proc loadTexture(path: string, red: bool): GLuint =
@@ -670,23 +667,22 @@ proc ensureMsaa(art: var ArtState, size: IVec2) =
 
 proc frame*(
   art: var ArtState, viewport: IVec2, view: tuple[scale: float32, offset: Vec2],
-  sim: Sim, hues: seq[float32], time: float64
+  sim: Sim, hues: seq[float32], time: float64, inkSteps = 2
 ) =
-  ## One art frame: ink sim step, splat injections, paint present
-  ## with the paper mix, then the 3d planet orbs on top.
+  ## One art frame: ink sim steps, splat injections, paint present
+  ## with the paper mix, then the 3d planet orbs on top. inkSteps
+  ## scales the ink flow with the game speed, two passes per frame
+  ## at normal speed.
   var noSplat = Splat()
-  art.fullscreenPass(
-    art.simProgram, art.fbo, art.stateTex[art.current], art.paper,
-    noSplat, 0.0, 0.0, viewport)
-  # The sim pass wrote into the other buffer.
-  glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
-  glFramebufferTexture2D(
-    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-    art.stateTex[1 - art.current], 0)
-  art.fullscreenPass(
-    art.simProgram, art.fbo, art.stateTex[art.current], art.paper,
-    noSplat, 0.0, 0.0, viewport)
-  art.current = 1 - art.current
+  for step in 0 ..< inkSteps:
+    glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
+    glFramebufferTexture2D(
+      GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+      art.stateTex[1 - art.current], 0)
+    art.fullscreenPass(
+      art.simProgram, art.fbo, art.stateTex[art.current], art.paper,
+      noSplat, 0.0, 0.0, viewport)
+    art.current = 1 - art.current
 
   # Inject queued splats, up to a sane cap per frame. The cap is
   # high enough that every ship trailing every tick still lands.
