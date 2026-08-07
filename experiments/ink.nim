@@ -136,16 +136,17 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
     state.y = state.y * speedCap / speed
   state.z = max(state.z * fadeMul - fadeSub, 0.0'f32)
 
-  # Eraser: a little fuzzy circle that cuts ink out of the paint.
-  # It also stills the flow where it cuts, so paint does not rush
-  # straight back into the hole.
+  # The push brush: a tiny fuzzy circle that shoves paint away from
+  # the cursor like a stick dragged through wet ink. Mostly velocity
+  # with just a whisper of erase, so it carves by displacement.
   if eraseAmount > 0.0'f32:
     let ed = (pos - erasePos) / eraseRadius
-    let cut = eraseAmount * inkG(ed)
-    state.z = max(state.z - cut, 0.0'f32)
-    let still = 1.0'f32 - clamp(cut, 0.0'f32, 1.0'f32)
-    state.x = state.x * still
-    state.y = state.y * still
+    let g = eraseAmount * inkG(ed)
+    let eAway = pos - erasePos + vec2(0.001, 0.001)
+    let shove = normalize(eAway) * g * 4.0'f32
+    state.x = state.x + shove.x
+    state.y = state.y + shove.y
+    state.z = max(state.z - g * 0.15'f32, 0.0'f32)
 
   # Splat: stamp the current splatter brush texture, rotated and
   # scaled, adding mass where the brush has ink. Hue blends by mass
@@ -477,7 +478,7 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glUniform2f(
     uniformLoc(program, "erasePos"), pendingErasePos.x, pendingErasePos.y)
   glUniform1f(uniformLoc(program, "eraseAmount"), pendingErase)
-  glUniform1f(uniformLoc(program, "eraseRadius"), 18.0)
+  glUniform1f(uniformLoc(program, "eraseRadius"), 3.0)
   glDrawArrays(GL_TRIANGLES, 0, 3)
 
 proc saveShot(path: string) =
