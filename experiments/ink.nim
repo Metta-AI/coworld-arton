@@ -435,6 +435,7 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
   glBindVertexArray(vao)
   glDisable(GL_BLEND)
   glDisable(GL_SCISSOR_TEST)
+  glBindVertexArray(vao)
   glUseProgram(program)
   glActiveTexture(GL_TEXTURE0)
   glBindTexture(GL_TEXTURE_2D, sourceTex)
@@ -496,25 +497,32 @@ window.onFrame = proc() =
   subWindow("Ink Params", showParams, vec2(16, 16), vec2(348, 470)):
     text "size label":
       characters "splat size"
-    scrubber "size", paramSize, 20.0'f32, 300.0'f32, ""
+    scrubber "size", paramSize, 20.0'f32, 300.0'f32,
+      formatFloat(paramSize, ffDecimal, 0)
     text "amount label":
       characters "splat amount"
-    scrubber "amount", paramAmount, 0.5'f32, 10.0'f32, ""
+    scrubber "amount", paramAmount, 0.5'f32, 10.0'f32,
+      formatFloat(paramAmount, ffDecimal, 1)
     text "push label":
       characters "burst push"
-    scrubber "push", paramPush, 0.0'f32, 10.0'f32, ""
+    scrubber "push", paramPush, 0.0'f32, 10.0'f32,
+      formatFloat(paramPush, ffDecimal, 1)
     text "damp label":
       characters "flow damping"
-    scrubber "damp", paramDamp, 0.9'f32, 1.0'f32, ""
+    scrubber "damp", paramDamp, 0.9'f32, 1.0'f32,
+      formatFloat(paramDamp, ffDecimal, 3)
     text "cap label":
       characters "speed cap"
-    scrubber "cap", paramSpeedCap, 0.5'f32, 8.0'f32, ""
+    scrubber "cap", paramSpeedCap, 0.5'f32, 8.0'f32,
+      formatFloat(paramSpeedCap, ffDecimal, 1)
     text "fade keep label":
       characters "fade keep"
-    scrubber "fadeKeep", paramFadeKeep, 0.985'f32, 1.0'f32, ""
+    scrubber "fadeKeep", paramFadeKeep, 0.985'f32, 1.0'f32,
+      formatFloat(paramFadeKeep, ffDecimal, 4)
     text "fade sub label":
       characters "fade sub x1000"
-    scrubber "fadeSub", paramFadeSub, 0.0'f32, 2.0'f32, ""
+    scrubber "fadeSub", paramFadeSub, 0.0'f32, 2.0'f32,
+      formatFloat(paramFadeSub, ffDecimal, 2)
   sk.endUi()
 
   window.swapBuffers()
