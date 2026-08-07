@@ -24,6 +24,7 @@ type
     ringInner*, ringOuter*: float32
     showRing*: bool
     trailEvery*, trailSize*, trailAmount*, trailDrag*: float32
+    trailExhaust*: float32
     deathSize*, deathAmount*, captureSize*, captureAmount*: float32
 
 var artParams* = ArtParams(
@@ -35,6 +36,7 @@ var artParams* = ArtParams(
   shellScale: 1.22, shellMissing: 0.47, ringInner: 1.69,
   ringOuter: 1.51, showRing: false,
   trailEvery: 1, trailSize: 16, trailAmount: 0.4, trailDrag: 8.0,
+  trailExhaust: 4.0,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
   captureAmount: 4.0)
 

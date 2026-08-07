@@ -819,11 +819,15 @@ proc stepSim() =
               vx = dirX * artParams.trailDrag,
               vy = dirY * artParams.trailDrag,
               angle = angle, ship = true)
+            # The stain shoots backward like a rocket exhaust, so
+            # the ink jets away behind the ship.
             artState.queueSplat(
               shipX - dirX * size * 0.5'f32,
               shipY - dirY * size * 0.5'f32,
               playerHue(ship.ownerId) / 360.0, size,
               amount = artParams.trailAmount,
+              vx = -dirX * artParams.trailExhaust,
+              vy = -dirY * artParams.trailExhaust,
               angle = angle, ship = true)
   var keep: seq[int32]
   for planetId in selected:
@@ -850,6 +854,8 @@ when not defined(emscripten):
   template shipsTab() =
     param "trail drag", "trailDrag",
       artParams.trailDrag, 0.0'f32, 8.0'f32, 1
+    param "engine exhaust", "trailExhaust",
+      artParams.trailExhaust, 0.0'f32, 12.0'f32, 1
     param "trail stain amount", "trailAmount",
       artParams.trailAmount, 0.0'f32, 3.0'f32, 2
     param "trail stain size", "trailSize",
