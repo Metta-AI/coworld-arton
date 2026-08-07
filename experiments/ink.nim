@@ -94,21 +94,38 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
   let here = texture(statePrev, uv)
   let src = (pos - here.xy * 1.5'f32) / resolution
 
+  # Ink diffuses with a wide kernel, velocity with a much tighter
+  # one. Averaging velocity with still neighbors acts like heavy
+  # friction, so keeping its kernel tight is what lets flow carry.
   var acc = vec4(0.0, 0.0, 0.0, 0.0)
+  var accVel = vec2(0.0, 0.0)
   var wsum = 0.0'f32
+  var velWsum = 0.0'f32
   for i in 0 ..< 3:
     for j in 0 ..< 3:
       let o = vec2(float32(i) - 1.0'f32, float32(j) - 1.0'f32)
+      let sample = texture(statePrev, src + o / resolution)
       let w = inkG(o * 0.8'f32)
-      acc = acc + w * texture(statePrev, src + o / resolution)
+      let wv = inkG(o * 1.4'f32)
+      acc = acc + w * sample
+      accVel = accVel + wv * sample.xy
       wsum = wsum + w
+      velWsum = velWsum + wv
   var state = acc / wsum
+  state.x = accVel.x / velWsum
+  state.y = accVel.y / velWsum
 
-  # Flow slows down fast. Ink fades away over time, the exponential
-  # part thins heavy pools and the linear part makes even the last
-  # faint stain reach zero, so the page always clears back to white.
-  state.x = state.x * 0.96'f32
-  state.y = state.y * 0.96'f32
+  # Gentle flow damping with a speed cap: flow carries, but bounded
+  # speed keeps the explosion from diluting the ink into nothing.
+  # Ink fades away over time, the exponential part thins heavy pools
+  # and the linear part makes even the last faint stain reach zero,
+  # so the page always clears back to white.
+  state.x = state.x * 0.985'f32
+  state.y = state.y * 0.985'f32
+  let speed = length(vec2(state.x, state.y))
+  if speed > 3.0'f32:
+    state.x = state.x * 3.0'f32 / speed
+    state.y = state.y * 3.0'f32 / speed
   state.z = max(state.z * 0.997'f32 - 0.0004'f32, 0.0'f32)
 
   # Splat: stamp the current splatter brush texture, rotated and
@@ -132,7 +149,7 @@ proc inkSimFrag(fragColor: var Vec4, uv: Vec2) =
         # the brush is dark since m carries the brush ink sample, so
         # the ink explodes outward from the stamp shape.
         let away = pos - splatPos + vec2(0.001, 0.001)
-        let push = normalize(away) * m * 8.0'f32
+        let push = normalize(away) * m * 3.0'f32
         state.x = state.x + push.x
         state.y = state.y + push.y
 
@@ -356,7 +373,7 @@ window.onButtonPress = proc(button: Button) =
     currentSplat = splatTextures[rand(splatTextures.len - 1)]
     currentAngle = rand(6.28318'f32)
     currentSize = 37.0'f32 + rand(40.0'f32)
-    queueSplat(mouseCanvas(), 2.5)
+    queueSplat(mouseCanvas(), 4.0)
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
