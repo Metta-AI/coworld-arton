@@ -82,26 +82,19 @@ proc artSimFrag(fragColor: var Vec4, uv: Vec2) =
       accVel = accVel + wv * sample.xy
       wsum = wsum + w
       velWsum = velWsum + wv
-  # Hue diffuses weighted by ink mass, otherwise empty pixels with
-  # hue zero bleed red into every fight and colors look wrong.
-  var hueMass = 0.0'f32
-  var massSum = 0.0'f32
-  for i in 0 ..< 3:
-    for j in 0 ..< 3:
-      let o = vec2(float32(i) - 1.0'f32, float32(j) - 1.0'f32)
-      let sample = texture(statePrev, src + o / resolution)
-      let w = inkG(o * 0.8'f32)
-      hueMass = hueMass + w * sample.z * sample.w
-      massSum = massSum + w * sample.z
+  # State w stores hue times mass, so plain linear diffusion and
+  # texture filtering stay color correct at any density.
   var state = acc / wsum
-  state.w = hueMass / max(massSum, 0.0001'f32)
   state.x = accVel.x / velWsum * 0.985'f32
   state.y = accVel.y / velWsum * 0.985'f32
   let speed = length(vec2(state.x, state.y))
   if speed > 3.0'f32:
     state.x = state.x * 3.0'f32 / speed
     state.y = state.y * 3.0'f32 / speed
+  let zBefore = state.z
   state.z = max(state.z * 0.9984'f32 - 0.0004'f32, 0.0'f32)
+  # Hue mass scales with the mass it belongs to.
+  state.w = state.w * state.z / max(zBefore, 0.0001'f32)
   fragColor = state
 
 proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
@@ -118,10 +111,8 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
     q.y > 0.0'f32 and q.y < 1.0'f32:
     let m = splatAmount * texture(paperTex, q).x
     if m > 0.0001'f32:
-      let total = state.z + m
-      state.w = (state.w * state.z + splatHue * m) /
-        max(total, 0.0001'f32)
-      state.z = total
+      state.w = state.w + splatHue * m
+      state.z = state.z + m
       # Directed splats, like ship trails, drag the ink along their
       # motion. Undirected ones burst outward from the center.
       if abs(splatVel.x) + abs(splatVel.y) > 0.001'f32:
@@ -150,7 +141,8 @@ proc artDrawFrag(fragColor: var Vec4, uv: Vec2) =
   let specular = pow(max(dot(n, dirV(1.4'f32)), 0.0'f32), 3.5'f32)
   let a = pow(sstep(0.0'f32, 1.0'f32, rho), 0.1'f32)
   let b = exp(-1.7'f32 * sstep(0.5'f32, 3.75'f32, rho))
-  let fcol = hsvToRgb(vec3(state.w, 0.85'f32, 0.75'f32))
+  let hue = state.w / max(rho, 0.0001'f32)
+  let fcol = hsvToRgb(vec3(hue, 0.85'f32, 0.75'f32))
   var col = vec3(3.0, 3.0, 3.0)
   col = mixN(col, fcol * (1.5'f32 * b + specular * 5.0'f32), a)
   col = tanh3(col)
