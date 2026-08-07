@@ -671,11 +671,11 @@ proc stepSim() =
       for death in sim.deaths:
         artState.queueSplat(
           float32(death.x), float32(death.y),
-          playerHue(death.ownerId) / 360.0, 24.0)
+          playerHue(death.ownerId) / 360.0, 48.0)
       for capture in sim.captures:
         artState.queueSplat(
           float32(capture.x), float32(capture.y),
-          playerHue(capture.ownerId) / 360.0, 120.0)
+          playerHue(capture.ownerId) / 360.0, 240.0)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
