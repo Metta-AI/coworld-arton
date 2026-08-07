@@ -18,19 +18,22 @@ type
     ## panel. Ship values are read by the splat queueing in arton.
     velDamp*, speedCap*, fadeKeep*, fadeSubK*, burstPush*: float32
     inkSat*, inkVal*, paperMix*: float32
-    planetSat*, planetVal*, spinSpeed*, washout*, specular*: float32
+    planetSat*, planetVal*, washout*, specular*: float32
+    spinInner*, spinOuter*: float32
     jitterInner*, jitterShell*, shellScale*, shellMissing*: float32
     ringInner*, ringOuter*: float32
+    showRing*: bool
     trailEvery*, trailSize*, trailAmount*, trailDrag*: float32
     deathSize*, deathAmount*, captureSize*, captureAmount*: float32
 
 var artParams* = ArtParams(
   velDamp: 0.985, speedCap: 3.0, fadeKeep: 0.9984, fadeSubK: 0.4,
   burstPush: 8.8, inkSat: 0.85, inkVal: 0.75, paperMix: 0.25,
-  planetSat: 0.8, planetVal: 0.85, spinSpeed: 1.0, washout: 0.9,
-  specular: 0.35, jitterInner: 0.13, jitterShell: 0.234,
-  shellScale: 1.21, shellMissing: 0.6, ringInner: 1.42,
-  ringOuter: 1.46,
+  planetSat: 1.0, planetVal: 1.0, washout: 0.0,
+  spinInner: 1.0, spinOuter: 1.0,
+  specular: 1.0, jitterInner: 0.035, jitterShell: 0.106,
+  shellScale: 1.22, shellMissing: 0.47, ringInner: 1.51,
+  ringOuter: 1.51, showRing: false,
   trailEvery: 9, trailSize: 11, trailAmount: 2.53, trailDrag: 6.6,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
   captureAmount: 4.0)
@@ -550,6 +553,16 @@ proc initArt*(): ArtState =
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
 
+proc clearCanvas*(art: var ArtState) =
+  ## Wipes the ink state back to blank paper, for game restarts.
+  art.queue.setLen(0)
+  for tex in art.stateTex:
+    glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
+    glFramebufferTexture2D(
+      GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0)
+    glClearColor(0, 0, 0, 0)
+    glClear(GL_COLOR_BUFFER_BIT)
+
 proc fullscreenPass(
   art: var ArtState, program: GLuint, target: GLuint,
   sourceTex, brushTex: GLuint, splat: Splat, amount: float32,
@@ -763,15 +776,17 @@ proc frame*(
       uniformLoc(art.planetProgram, "ownerColor"),
       color.x, color.y, color.z)
 
-    let tf = float32(time) * artParams.spinSpeed
+    let tfInner = float32(time) * artParams.spinInner
+    let tfOuter = float32(time) * artParams.spinOuter
     drawOne(art.planetProgram, meshes.inner,
-      base * rotateY(0.35'f32 * rateK * tf + seed) *
+      base * rotateY(0.35'f32 * rateK * tfInner + seed) *
       rotateX(0.35'f32), proj)
     drawOne(art.planetProgram, meshes.outer,
-      base * rotateY(-0.64'f32 * rateK * tf + seed) *
+      base * rotateY(-0.64'f32 * rateK * tfOuter + seed) *
       rotateZ(0.22'f32), proj)
-    drawOne(art.planetProgram, meshes.ring,
-      base * rotateZ(2.0'f32 * rateK * tf + seed), proj)
+    if artParams.showRing:
+      drawOne(art.planetProgram, meshes.ring,
+        base * rotateZ(2.0'f32 * rateK * tfOuter + seed), proj)
   glDisable(GL_DEPTH_TEST)
 
   # Resolve the msaa layer and blend it onto the screen.

@@ -355,9 +355,9 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
   let hud = &"offense {sim.offenseFactor(HumanPlayer)}%  " &
     &"time {gameClock(sim.tickCount)}  " &
     &"tick {sim.tickCount}  " &
-    &"speed {hudSpeed}x  " &
+    &"speed {hudSpeed}x [ ]  " &
     &"demo {(if demoEnabled: \"on\" else: \"off\")} (D)  " &
-    "screenshot (F2)"
+    "restart (F2)  screenshot (F3)"
   ctx.fillText(hud, vec2(10, 24))
 
   if sim.outcome != MatchOngoing:
@@ -506,15 +506,16 @@ block:
   if shotPath != "" or flagValue("window") == "false":
     runHeadless(shotPath)
 
+var gameSeed = 1'u32
 sim = newSim(initSimConfig(
-  seed = 1,
+  seed = gameSeed,
   planetCount = planetsFlag(aiPlayerCount()),
   playerCount = aiPlayerCount(),
   maxTicks = maxTicksFlag()
 ))
 agentOpsPerTurn = maxOpsFlag()
 aiAgents = loadAgents(sim.config.playerCount)
-let speedMultiplier = speedFlag()
+var speedMultiplier = speedFlag()
 hudSpeed = speedMultiplier
 echo "map: ", sim.config.planetCount, " planets, ",
   sim.config.playerCount, " players, ", agentOpsPerTurn,
@@ -614,6 +615,28 @@ proc handleBoxSelect(boxRect: Rect) =
       planet.id notin selected:
         selected.add(planet.id)
 
+proc restartGame() =
+  ## A brand new match on a fresh seed, on blank paper.
+  inc gameSeed
+  sim = newSim(initSimConfig(
+    seed = gameSeed,
+    planetCount = planetsFlag(aiPlayerCount()),
+    playerCount = aiPlayerCount(),
+    maxTicks = maxTicksFlag()
+  ))
+  aiAgents = loadAgents(sim.config.playerCount)
+  selected = @[]
+  pendingCaptures.clear()
+  if artReady:
+    artState.clearCanvas()
+  echo "restarted with seed ", gameSeed
+
+proc changeSpeed(factor: float64) =
+  ## Doubles or halves the game speed from the bracket keys.
+  speedMultiplier = clamp(speedMultiplier * factor, 0.25, 64.0)
+  hudSpeed = speedMultiplier
+  echo "game speed: ", speedMultiplier, "x"
+
 window.onButtonPress = proc(button: Button) =
   if button in {MouseLeft, DoubleClick} and mouseOnUi():
     return
@@ -656,8 +679,14 @@ window.onButtonPress = proc(button: Button) =
   of KeyF1:
     showParams = not showParams
   of KeyF2:
+    restartGame()
+  of KeyF3:
     let box = boxRectNow(mouseWorld())
     takeScreenshot(sim.renderFrame(selected, box, false, -1, @[]))
+  of KeyLeftBracket:
+    changeSpeed(0.5)
+  of KeyRightBracket:
+    changeSpeed(2.0)
   else:
     discard
 
@@ -807,8 +836,10 @@ when not defined(emscripten):
       artParams.planetSat, 0.0'f32, 1.0'f32, 2
     param "color val", "planetVal",
       artParams.planetVal, 0.0'f32, 1.0'f32, 2
-    param "spin speed", "spinSpeed",
-      artParams.spinSpeed, 0.0'f32, 3.0'f32, 2
+    param "inner spin", "spinInner",
+      artParams.spinInner, 0.0'f32, 3.0'f32, 2
+    param "outer spin", "spinOuter",
+      artParams.spinOuter, 0.0'f32, 3.0'f32, 2
     param "white washout", "washout",
       artParams.washout, 0.0'f32, 1.0'f32, 2
     param "specular", "specular",
@@ -821,6 +852,7 @@ when not defined(emscripten):
       artParams.shellScale, 1.0'f32, 1.6'f32, 2
     param "shell missing", "shellMissing",
       artParams.shellMissing, 0.0'f32, 0.95'f32, 2
+    checkBox "ring", artParams.showRing
     param "ring inner", "ringInner",
       artParams.ringInner, 1.0'f32, 2.0'f32, 2
     param "ring outer", "ringOuter",
