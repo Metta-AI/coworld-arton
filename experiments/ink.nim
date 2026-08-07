@@ -430,6 +430,11 @@ proc runPass(program: GLuint, target: GLuint, sourceTex: GLuint) =
     )
   else:
     glViewport(0, 0, SimWidth, SimHeight)
+  # Rebind everything: the silky UI pass leaves its own vao, blend
+  # and scissor state behind each frame.
+  glBindVertexArray(vao)
+  glDisable(GL_BLEND)
+  glDisable(GL_SCISSOR_TEST)
   glUseProgram(program)
   glActiveTexture(GL_TEXTURE0)
   glBindTexture(GL_TEXTURE_2D, sourceTex)
