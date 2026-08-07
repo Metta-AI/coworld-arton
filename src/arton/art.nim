@@ -34,7 +34,7 @@ var artParams* = ArtParams(
   specular: 1.0, jitterInner: 0.035, jitterShell: 0.106,
   shellScale: 1.22, shellMissing: 0.47, ringInner: 1.69,
   ringOuter: 1.51, showRing: false,
-  trailEvery: 9, trailSize: 11, trailAmount: 2.53, trailDrag: 6.6,
+  trailEvery: 1, trailSize: 16, trailAmount: 0.4, trailDrag: 8.0,
   deathSize: 48, deathAmount: 4.0, captureSize: 240,
   captureAmount: 4.0)
 
@@ -163,22 +163,72 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
         state.y = state.y + push.y
   fragColor = state
 
+proc trailVert(
+  gl_Position: var Vec4, vUv: var Vec2, vHue: var float32,
+  vAmount: var float32, vVel: var Vec2,
+  vertexPos: Vec2, vertexUv: Vec2, vertexHue: float32,
+  vertexAmount: float32, vertexVel: Vec2
+) =
+  ## Canvas pixel coords to ndc over the ink state buffer.
+  let ndc = vertexPos / resolution * 2.0'f32 - vec2(1.0, 1.0)
+  gl_Position = vec4(ndc.x, ndc.y, 0.0, 1.0)
+  vUv = vertexUv
+  vHue = vertexHue
+  vAmount = vertexAmount
+  vVel = vertexVel
+
+proc trailFrag(
+  fragColor: var Vec4, vUv: Vec2, vHue: float32,
+  vAmount: float32, vVel: Vec2
+) =
+  ## Additive delta: velocity shaped by the brush, ink mass and hue
+  ## mass where the stamp has ink. Blends ONE, ONE onto the state.
+  let b = texture(paperTex, vUv).x
+  let m = vAmount * b
+  fragColor = vec4(vVel.x * b, vVel.y * b, m, vHue * m)
+
 proc shipVert(
-  gl_Position: var Vec4, vUv: var Vec2, vColor: var Vec3,
-  vertexPos: Vec2, vertexUv: Vec2, vertexColor: Vec3
+  gl_Position: var Vec4, vUv: var Vec2,
+  vertexPos: Vec2, vertexUv: Vec2
 ) =
   ## Window pixel coords to ndc, y flipped.
   let ndc = vertexPos / resolution * 2.0'f32 - vec2(1.0, 1.0)
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0)
   vUv = vertexUv
-  vColor = vertexColor
 
-proc shipFrag(
-  fragColor: var Vec4, vUv: Vec2, vColor: Vec3
+proc shipFrag(fragColor: var Vec4, vUv: Vec2) =
+  ## The sprite draws as authored: white body, black stroke, like
+  ## the planet count letters. Premultiplied straight from the png.
+  fragColor = texture(paperTex, vUv)
+
+proc circleVert(
+  gl_Position: var Vec4, vLocal: var Vec2, vRadius: var float32,
+  vFill: var Vec4, vStroke: var Vec4,
+  vertexPos: Vec2, vertexLocal: Vec2, vertexRadius: float32,
+  vertexFill: Vec4, vertexStroke: Vec4
 ) =
-  ## The sprite alpha shapes a premultiplied fill of the owner color.
-  let a = texture(paperTex, vUv).w
-  fragColor = vec4(vColor.x * a, vColor.y * a, vColor.z * a, a)
+  ## Window pixel coords to ndc, y flipped.
+  let ndc = vertexPos / resolution * 2.0'f32 - vec2(1.0, 1.0)
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0)
+  vLocal = vertexLocal
+  vRadius = vertexRadius
+  vFill = vertexFill
+  vStroke = vertexStroke
+
+proc circleFrag(
+  fragColor: var Vec4, vLocal: Vec2, vRadius: float32,
+  vFill: Vec4, vStroke: Vec4
+) =
+  ## Antialiased filled disc with a two pixel outline band.
+  let d = length(vLocal)
+  let fillA = 1.0'f32 - sstep(vRadius - 1.0'f32, vRadius, d)
+  let strokeA =
+    (1.0'f32 - sstep(vRadius, vRadius + 1.0'f32, d)) *
+    sstep(vRadius - 2.5'f32, vRadius - 1.5'f32, d)
+  var col = vFill * fillA
+  col = col * (1.0'f32 - strokeA) + vStroke * strokeA
+  fragColor = vec4(
+    col.x * col.w, col.y * col.w, col.z * col.w, col.w)
 
 proc compositeFrag(fragColor: var Vec4, uv: Vec2) =
   ## Draws the resolved msaa planet layer over the canvas.
@@ -297,6 +347,8 @@ type
     msaaSize: IVec2
     shipProgram, shipTex, shipVao, shipVbo: GLuint
     shipAspect, shipBrushAspect: float32
+    trailProgram, trailVao, trailVbo: GLuint
+    circleProgram, circleVao, circleVbo: GLuint
     queue*: seq[Splat]
 
 proc compileShader(kind: GLenum, source: string): GLuint =
@@ -575,9 +627,8 @@ proc initArt*(): ArtState =
   glBindVertexArray(result.shipVao)
   glGenBuffers(1, addr result.shipVbo)
   glBindBuffer(GL_ARRAY_BUFFER, result.shipVbo)
-  let shipStride = GLsizei(28)
-  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8),
-      ("vertexColor", 3, 16)]:
+  let shipStride = GLsizei(16)
+  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8)]:
     let loc = glGetAttribLocation(
       result.shipProgram, spec[0].cstring)
     if loc >= 0:
@@ -585,6 +636,44 @@ proc initArt*(): ArtState =
       glVertexAttribPointer(
         GLuint(loc), GLint(spec[1]), cGL_FLOAT, GL_FALSE, shipStride,
         cast[pointer](spec[2]))
+
+  result.trailProgram = makeProgram(
+    toShader(trailVert, glsl3Desktop, shaderVertex),
+    toShader(trailFrag, glsl3Desktop, shaderFragment))
+  glGenVertexArrays(1, addr result.trailVao)
+  glBindVertexArray(result.trailVao)
+  glGenBuffers(1, addr result.trailVbo)
+  glBindBuffer(GL_ARRAY_BUFFER, result.trailVbo)
+  let trailStride = GLsizei(32)
+  for spec in [("vertexPos", 2, 0), ("vertexUv", 2, 8),
+      ("vertexHue", 1, 16), ("vertexAmount", 1, 20),
+      ("vertexVel", 2, 24)]:
+    let loc = glGetAttribLocation(
+      result.trailProgram, spec[0].cstring)
+    if loc >= 0:
+      glEnableVertexAttribArray(GLuint(loc))
+      glVertexAttribPointer(
+        GLuint(loc), GLint(spec[1]), cGL_FLOAT, GL_FALSE,
+        trailStride, cast[pointer](spec[2]))
+
+  result.circleProgram = makeProgram(
+    toShader(circleVert, glsl3Desktop, shaderVertex),
+    toShader(circleFrag, glsl3Desktop, shaderFragment))
+  glGenVertexArrays(1, addr result.circleVao)
+  glBindVertexArray(result.circleVao)
+  glGenBuffers(1, addr result.circleVbo)
+  glBindBuffer(GL_ARRAY_BUFFER, result.circleVbo)
+  let circleStride = GLsizei(52)
+  for spec in [("vertexPos", 2, 0), ("vertexLocal", 2, 8),
+      ("vertexRadius", 1, 16), ("vertexFill", 4, 20),
+      ("vertexStroke", 4, 36)]:
+    let loc = glGetAttribLocation(
+      result.circleProgram, spec[0].cstring)
+    if loc >= 0:
+      glEnableVertexAttribArray(GLuint(loc))
+      glVertexAttribPointer(
+        GLuint(loc), GLint(spec[1]), cGL_FLOAT, GL_FALSE,
+        circleStride, cast[pointer](spec[2]))
 
   result.paper = loadTexture("data/bg.png", red = false)
   var paths: seq[string]
@@ -680,12 +769,12 @@ proc drawOne(program: GLuint, mesh: PlanetMesh, model, proj: Mat4) =
 proc drawShips*(
   art: var ArtState, viewport: IVec2,
   view: tuple[scale: float32, offset: Vec2], sim: Sim,
-  colors: seq[Vec3], size: float32
+  size: float32
 ) =
   ## Every ship as one rotated textured quad in a single gl draw.
   if sim.ships.len == 0:
     return
-  var verts = newSeqOfCap[float32](sim.ships.len * 6 * 7)
+  var verts = newSeqOfCap[float32](sim.ships.len * 6 * 4)
   let halfW = size / 2 * view.scale
   let halfH = halfW * art.shipAspect
   for ship in sim.ships:
@@ -700,16 +789,11 @@ proc drawShips*(
         float32(PI) / 2
       ca = cos(angle)
       sa = sin(angle)
-      color =
-        if ship.ownerId >= 1 and ship.ownerId <= int32(colors.len):
-          colors[ship.ownerId - 1]
-        else:
-          vec3(0.3, 0.3, 0.3)
     template corner(ox, oy, u, v: float32) =
       verts.add([
         float32(x + ox * ca - oy * sa),
         float32(y + ox * sa + oy * ca),
-        float32(u), float32(v), color.x, color.y, color.z])
+        float32(u), float32(v)])
     corner(-halfW, -halfH, 0, 0)
     corner(halfW, -halfH, 1, 0)
     corner(halfW, halfH, 1, 1)
@@ -733,6 +817,104 @@ proc drawShips*(
     uniformLoc(art.shipProgram, "resolution"),
     float32(viewport.x), float32(viewport.y))
   glDrawArrays(GL_TRIANGLES, 0, GLsizei(verts.len div 7))
+  glDisable(GL_BLEND)
+
+proc injectTrails(art: var ArtState, splats: seq[Splat]) =
+  ## Every ship trail stamp in one additive pass straight into the
+  ## current state texture: small quads, no per splat fullscreen
+  ## cost, so every tick trails from big fleets all land.
+  if splats.len == 0:
+    return
+  var verts = newSeqOfCap[float32](splats.len * 6 * 8)
+  for splat in splats:
+    let
+      ca = cos(splat.angle)
+      sa = sin(splat.angle)
+      # Canvas y is flipped, so the world heading direction becomes
+      # (cos, -sin) with (sin, cos) perpendicular.
+      ux = ca
+      uy = -sa
+      px = sa
+      py = ca
+      hw = splat.size / 2
+      hh = splat.size * art.shipBrushAspect / 2
+    template corner(du, dv, u, v: float32) =
+      verts.add([
+        float32(splat.x + ux * du + px * dv),
+        float32(splat.y + uy * du + py * dv),
+        float32(u), float32(v),
+        splat.hue, splat.amount, splat.vx, splat.vy])
+    corner(-hw, -hh, 0, 0)
+    corner(hw, -hh, 1, 0)
+    corner(hw, hh, 1, 1)
+    corner(-hw, -hh, 0, 0)
+    corner(hw, hh, 1, 1)
+    corner(-hw, hh, 0, 1)
+  glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
+  glFramebufferTexture2D(
+    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+    art.stateTex[art.current], 0)
+  glViewport(0, 0, InkW, InkH)
+  glBindVertexArray(art.trailVao)
+  glBindBuffer(GL_ARRAY_BUFFER, art.trailVbo)
+  glBufferData(
+    GL_ARRAY_BUFFER, verts.len * 4, addr verts[0], GL_STREAM_DRAW)
+  glDisable(GL_DEPTH_TEST)
+  glEnable(GL_BLEND)
+  glBlendFunc(GL_ONE, GL_ONE)
+  glUseProgram(art.trailProgram)
+  glActiveTexture(GL_TEXTURE0)
+  glBindTexture(GL_TEXTURE_2D, art.shipBrush)
+  glUniform1i(uniformLoc(art.trailProgram, "paperTex"), 0)
+  glUniform2f(
+    uniformLoc(art.trailProgram, "resolution"),
+    float32(InkW), float32(InkH))
+  glDrawArrays(GL_TRIANGLES, 0, GLsizei(verts.len div 8))
+  glDisable(GL_BLEND)
+
+proc drawDebugPlanets*(
+  art: var ArtState, viewport: IVec2,
+  view: tuple[scale: float32, offset: Vec2], sim: Sim,
+  fills, strokes: seq[Vec4]
+) =
+  ## The debug view planets as one batch of antialiased gl discs,
+  ## indexed per planet, instead of cpu rasterized circles.
+  if sim.planets.len == 0:
+    return
+  var verts = newSeqOfCap[float32](sim.planets.len * 6 * 13)
+  for planet in sim.planets:
+    let
+      x = view.offset.x + float32(planet.x) * view.scale
+      y = view.offset.y + float32(planet.y) * view.scale
+      radius = float32(planet.radius) * view.scale
+      half = radius + 3
+      fill = fills[planet.id]
+      stroke = strokes[planet.id]
+    template corner(ox, oy: float32) =
+      verts.add([
+        x + ox, y + oy, ox, oy, radius,
+        fill.x, fill.y, fill.z, fill.w,
+        stroke.x, stroke.y, stroke.z, stroke.w])
+    corner(-half, -half)
+    corner(half, -half)
+    corner(half, half)
+    corner(-half, -half)
+    corner(half, half)
+    corner(-half, half)
+  glBindFramebuffer(GL_FRAMEBUFFER, 0)
+  glViewport(0, 0, viewport.x, viewport.y)
+  glBindVertexArray(art.circleVao)
+  glBindBuffer(GL_ARRAY_BUFFER, art.circleVbo)
+  glBufferData(
+    GL_ARRAY_BUFFER, verts.len * 4, addr verts[0], GL_STREAM_DRAW)
+  glDisable(GL_DEPTH_TEST)
+  glEnable(GL_BLEND)
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+  glUseProgram(art.circleProgram)
+  glUniform2f(
+    uniformLoc(art.circleProgram, "resolution"),
+    float32(viewport.x), float32(viewport.y))
+  glDrawArrays(GL_TRIANGLES, 0, GLsizei(verts.len div 13))
   glDisable(GL_BLEND)
 
 proc ensureMsaa(art: var ArtState, size: IVec2) =
@@ -792,34 +974,29 @@ proc frame*(
       noSplat, 0.0, 0.0, viewport)
     art.current = 1 - art.current
 
-  # Inject queued splats, up to a sane cap per frame. The cap is
-  # high enough that every ship trailing every tick still lands.
+  # Ship trail stamps all land in one additive batch, the other
+  # splats keep the brush ping pong path with a sane cap.
+  var trailSplats: seq[Splat]
+  var otherSplats: seq[Splat]
+  for splat in art.queue:
+    if splat.ship:
+      trailSplats.add(splat)
+    else:
+      otherSplats.add(splat)
+  art.queue = otherSplats
+  art.injectTrails(trailSplats)
   var injected = 0
-  while art.queue.len > 0 and injected < 64:
+  while art.queue.len > 0 and injected < 16:
     let splat = art.queue[0]
     art.queue.delete(0)
     glBindFramebuffer(GL_FRAMEBUFFER, art.fbo)
     glFramebufferTexture2D(
       GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
       art.stateTex[1 - art.current], 0)
-    let brush =
-      if splat.ship:
-        art.shipBrush
-      else:
-        art.brushes[rand(art.brushes.len - 1)]
-    let angle =
-      if splat.ship:
-        splat.angle
-      else:
-        rand(6.28318'f32)
-    let aspect =
-      if splat.ship:
-        art.shipBrushAspect
-      else:
-        1.0'f32
     art.fullscreenPass(
       art.injectProgram, art.fbo, art.stateTex[art.current],
-      brush, splat, splat.amount, angle, viewport, aspect)
+      art.brushes[rand(art.brushes.len - 1)],
+      splat, splat.amount, rand(6.28318'f32), viewport)
     art.current = 1 - art.current
     inc injected
 

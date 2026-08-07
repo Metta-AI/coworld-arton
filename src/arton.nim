@@ -177,17 +177,6 @@ proc strokeColor(ownerId: int32): ColorRGBA =
   return hsv(playerHue(ownerId), 95, 52).color.rgba
 
 let shipImage = readImage("data/ship.png")
-var shipSprites: Table[int32, Image]
-
-proc shipSprite(ownerId: int32): Image =
-  ## The ship sprite tinted with the owner's color, cached. The
-  ## sprite alpha masks a solid fill of the owner color.
-  if ownerId in shipSprites:
-    return shipSprites[ownerId]
-  result = newImage(shipImage.width, shipImage.height)
-  result.fill(strokeColor(ownerId))
-  result.draw(shipImage, blendMode = MaskBlend)
-  shipSprites[ownerId] = result
 
 proc offenseFactor(sim: Sim, playerId: int32): int32 =
   ## Reads a player's offense factor.
@@ -336,9 +325,7 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       ctx.rotate(angle + float32(PI) / 2)
       let aspect =
         float32(shipImage.height) / float32(shipImage.width)
-      ctx.drawImage(
-        shipSprite(ship.ownerId),
-        -10, -10 * aspect, 20, 20 * aspect)
+      ctx.drawImage(shipImage, -10, -10 * aspect, 20, 20 * aspect)
       ctx.restore()
 
   ctx.fillStyle = HudColor
@@ -794,24 +781,33 @@ proc stepSim() =
           fired.add(key)
       for key in fired:
         pendingCaptures.del(key)
-      # Ships stamp their own V shape at their heading, dragging the
-      # ink with them, staggered by age so the queue stays sane. The
-      # residue is every - 1 so a cadence of one splats every tick.
+      # Every ship makes two stamps: a bow push ahead of it that
+      # drags the ink in front of it along, and an ink stain behind
+      # it at zero velocity, so the trail stays where the ship was.
       for ship in sim.ships:
         let every = max(int32(artParams.trailEvery), 1)
         if ship.age mod every == every - 1 and
-          artState.queue.len < 256:
+          artState.queue.len < 4096:
+            let
+              shipX = float32(ship.x div SubpixelScale)
+              shipY = float32(ship.y div SubpixelScale)
+              dirX = float32(cos256(ship.heading)) / 4096.0'f32
+              dirY = float32(sin256(ship.heading)) / 4096.0'f32
+              angle = float32(ship.heading) * 2.0'f32 * PI / 256.0'f32
+              size = artParams.trailSize
             artState.queueSplat(
-              float32(ship.x div SubpixelScale),
-              float32(ship.y div SubpixelScale),
-              playerHue(ship.ownerId) / 360.0, artParams.trailSize,
+              shipX + dirX * size * 0.7'f32,
+              shipY + dirY * size * 0.7'f32,
+              0.0, size, amount = 0.0,
+              vx = dirX * artParams.trailDrag,
+              vy = dirY * artParams.trailDrag,
+              angle = angle, ship = true)
+            artState.queueSplat(
+              shipX - dirX * size * 0.5'f32,
+              shipY - dirY * size * 0.5'f32,
+              playerHue(ship.ownerId) / 360.0, size,
               amount = artParams.trailAmount,
-              vx = float32(cos256(ship.heading)) / 4096.0 *
-                artParams.trailDrag,
-              vy = float32(sin256(ship.heading)) / 4096.0 *
-                artParams.trailDrag,
-              angle = float32(ship.heading) * 2.0'f32 * PI / 256.0'f32,
-              ship = true)
+              angle = angle, ship = true)
   var keep: seq[int32]
   for planetId in selected:
     if sim.planets[planetId].ownerId == HumanPlayer:
@@ -943,26 +939,39 @@ proc drawWindow() {.measure.} =
       else:
         @[]
     view = viewTransform(windowSize)
+  if not artReady:
+    artState = initArt()
+    artReady = true
+  when defined(fpsDebug):
+    let artT0 = epochTime()
   if artMode:
-    if not artReady:
-      artState = initArt()
-      artReady = true
     var hues: seq[float32]
     for player in sim.players:
       hues.add(playerHue(player.id) / 360.0)
-    when defined(fpsDebug):
-      let artT0 = epochTime()
     artState.frame(
       windowSize, view, sim, hues, epochTime() - appStart)
-    var shipColors: seq[Vec3]
-    for player in sim.players:
-      let c = strokeColor(player.id)
-      shipColors.add(vec3(
-        float32(c.r) / 255, float32(c.g) / 255, float32(c.b) / 255))
-    artState.drawShips(windowSize, view, sim, shipColors, 20.0)
-    when defined(fpsDebug):
-      glFinish()
-      fpsArtSecs += epochTime() - artT0
+  else:
+    # The debug view is all gl too: white clear, flat disc planets
+    # and the same ship sprites, no cpu rasterizing.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0)
+    glViewport(0, 0, windowSize.x, windowSize.y)
+    glClearColor(1, 1, 1, 1)
+    glClear(GL_COLOR_BUFFER_BIT)
+    var fills, strokes: seq[Vec4]
+    for planet in sim.planets:
+      let f = fillColor(planet.ownerId)
+      let s = strokeColor(planet.ownerId)
+      fills.add(vec4(
+        float32(f.r) / 255, float32(f.g) / 255,
+        float32(f.b) / 255, 1.0))
+      strokes.add(vec4(
+        float32(s.r) / 255, float32(s.g) / 255,
+        float32(s.b) / 255, 1.0))
+    artState.drawDebugPlanets(windowSize, view, sim, fills, strokes)
+  artState.drawShips(windowSize, view, sim, 20.0)
+  when defined(fpsDebug):
+    glFinish()
+    fpsArtSecs += epochTime() - artT0
   when defined(fpsDebug):
     let renderT0 = epochTime()
   let frame = sim.renderFrame(
@@ -972,8 +981,8 @@ proc drawWindow() {.measure.} =
     dragTarget,
     dragSources,
     view.scale,
-    artOverlay = artMode,
-    drawShips = not artMode
+    artOverlay = true,
+    drawShips = false
   )
   when defined(fpsDebug):
     fpsRenderSecs += epochTime() - renderT0
@@ -983,7 +992,7 @@ proc drawWindow() {.measure.} =
   glEnable(GL_BLEND)
   glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
   bxy.addImage("frame", frame, mipmaps = false)
-  bxy.beginFrame(windowSize, clearFrame = not artMode)
+  bxy.beginFrame(windowSize, clearFrame = false)
   bxy.drawImage("frame", rect(
     view.offset,
     vec2(float32(frame.width), float32(frame.height))
