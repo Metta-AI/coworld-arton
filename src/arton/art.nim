@@ -48,6 +48,7 @@ var
   splatSize: Uniform[float32]
   splatAngle: Uniform[float32]
   splatVel: Uniform[Vec2]
+  splatAspect: Uniform[float32]
   mvp: Uniform[Mat4]
   modelRot: Uniform[Mat4]
   ownerColor: Uniform[Vec3]
@@ -141,8 +142,9 @@ proc artInjectFrag(fragColor: var Vec4, uv: Vec2) =
   let rel = (pos - splatPos) / splatSize
   let cA = cos(splatAngle)
   let sA = sin(splatAngle)
-  let q = vec2(rel.x * cA - rel.y * sA, rel.x * sA + rel.y * cA) +
-    0.5'f32
+  let q = vec2(
+    rel.x * cA - rel.y * sA,
+    (rel.x * sA + rel.y * cA) / splatAspect) + 0.5'f32
   if q.x > 0.0'f32 and q.x < 1.0'f32 and
     q.y > 0.0'f32 and q.y < 1.0'f32:
     let m = splatAmount * texture(paperTex, q).x
@@ -294,6 +296,7 @@ type
     resolveFbo, resolveTex: GLuint
     msaaSize: IVec2
     shipProgram, shipTex, shipVao, shipVbo: GLuint
+    shipAspect, shipBrushAspect: float32
     queue*: seq[Splat]
 
 proc compileShader(kind: GLenum, source: string): GLuint =
@@ -354,19 +357,24 @@ proc inkTexture(image: Image): GLuint =
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GLint(GL_CLAMP_TO_EDGE))
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GLint(GL_CLAMP_TO_EDGE))
 
-proc shipBrushTexture(): GLuint =
+proc shipBrushTexture(): tuple[tex: GLuint, aspect: float32] =
   ## The blurred ship splat as an ink stamp, rotated nose to plus x,
   ## so a trail stamp rotated by the ship heading inks its shape.
+  ## The rotated canvas swaps the sprite dims so nothing clips, and
+  ## the aspect (height over width) keeps the stamp unstretched.
   let sprite = readImage("data/ship_splat.png")
-  let half = vec2(
-    float32(sprite.width) / 2, float32(sprite.height) / 2)
-  let image = newImage(sprite.width, sprite.height)
+  let image = newImage(sprite.height, sprite.width)
   image.fill(rgba(255, 255, 255, 255))
   let ctx = newContext(image)
-  ctx.translate(half)
+  ctx.translate(vec2(
+    float32(image.width) / 2, float32(image.height) / 2))
   ctx.rotate(float32(PI) / 2)
-  ctx.drawImage(sprite, -half.x, -half.y)
-  return inkTexture(image)
+  ctx.drawImage(
+    sprite,
+    -float32(sprite.width) / 2, -float32(sprite.height) / 2)
+  return (
+    inkTexture(image),
+    float32(image.height) / float32(image.width))
 
 proc loadTexture(path: string, red: bool): GLuint =
   ## Loads a png. Red means single channel ink amount, black is ink.
@@ -559,6 +567,10 @@ proc initArt*(): ArtState =
     toShader(shipVert, glsl3Desktop, shaderVertex),
     toShader(shipFrag, glsl3Desktop, shaderFragment))
   result.shipTex = loadTexture("data/ship.png", red = false)
+  block:
+    let sprite = readImage("data/ship.png")
+    result.shipAspect =
+      float32(sprite.height) / float32(sprite.width)
   glGenVertexArrays(1, addr result.shipVao)
   glBindVertexArray(result.shipVao)
   glGenBuffers(1, addr result.shipVbo)
@@ -582,7 +594,7 @@ proc initArt*(): ArtState =
   for path in paths:
     result.brushes.add(loadTexture(path, red = true))
   doAssert result.brushes.len > 0, "no splat brushes found"
-  result.shipBrush = shipBrushTexture()
+  (result.shipBrush, result.shipBrushAspect) = shipBrushTexture()
 
 proc uniformLoc(program: GLuint, name: string): GLint =
   glGetUniformLocation(program, name.cstring)
@@ -600,7 +612,7 @@ proc clearCanvas*(art: var ArtState) =
 proc fullscreenPass(
   art: var ArtState, program: GLuint, target: GLuint,
   sourceTex, brushTex: GLuint, splat: Splat, amount: float32,
-  angle: float32, viewport: IVec2
+  angle: float32, viewport: IVec2, aspect = 1.0'f32
 ) =
   glBindFramebuffer(GL_FRAMEBUFFER, target)
   if target != 0:
@@ -625,6 +637,7 @@ proc fullscreenPass(
   glUniform1f(uniformLoc(program, "splatSize"), splat.size)
   glUniform1f(uniformLoc(program, "splatAngle"), angle)
   glUniform2f(uniformLoc(program, "splatVel"), splat.vx, splat.vy)
+  glUniform1f(uniformLoc(program, "splatAspect"), aspect)
   glUniform1f(uniformLoc(program, "velDamp"), artParams.velDamp)
   glUniform1f(uniformLoc(program, "speedCap"), artParams.speedCap)
   glUniform1f(uniformLoc(program, "fadeMul"), artParams.fadeKeep)
@@ -673,7 +686,8 @@ proc drawShips*(
   if sim.ships.len == 0:
     return
   var verts = newSeqOfCap[float32](sim.ships.len * 6 * 7)
-  let half = size / 2 * view.scale
+  let halfW = size / 2 * view.scale
+  let halfH = halfW * art.shipAspect
   for ship in sim.ships:
     let
       x = view.offset.x +
@@ -696,12 +710,12 @@ proc drawShips*(
         float32(x + ox * ca - oy * sa),
         float32(y + ox * sa + oy * ca),
         float32(u), float32(v), color.x, color.y, color.z])
-    corner(-half, -half, 0, 0)
-    corner(half, -half, 1, 0)
-    corner(half, half, 1, 1)
-    corner(-half, -half, 0, 0)
-    corner(half, half, 1, 1)
-    corner(-half, half, 0, 1)
+    corner(-halfW, -halfH, 0, 0)
+    corner(halfW, -halfH, 1, 0)
+    corner(halfW, halfH, 1, 1)
+    corner(-halfW, -halfH, 0, 0)
+    corner(halfW, halfH, 1, 1)
+    corner(-halfW, halfH, 0, 1)
   glBindFramebuffer(GL_FRAMEBUFFER, 0)
   glViewport(0, 0, viewport.x, viewport.y)
   glBindVertexArray(art.shipVao)
@@ -798,9 +812,14 @@ proc frame*(
         splat.angle
       else:
         rand(6.28318'f32)
+    let aspect =
+      if splat.ship:
+        art.shipBrushAspect
+      else:
+        1.0'f32
     art.fullscreenPass(
       art.injectProgram, art.fbo, art.stateTex[art.current],
-      brush, splat, splat.amount, angle, viewport)
+      brush, splat, splat.amount, angle, viewport, aspect)
     art.current = 1 - art.current
     inc injected
 

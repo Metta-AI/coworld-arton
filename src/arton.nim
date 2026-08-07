@@ -334,7 +334,11 @@ proc renderFrame(sim: Sim, selected: seq[int32], boxRect: Rect,
       ctx.save()
       ctx.translate(vec2(x, y))
       ctx.rotate(angle + float32(PI) / 2)
-      ctx.drawImage(shipSprite(ship.ownerId), -10, -10, 20, 20)
+      let aspect =
+        float32(shipImage.height) / float32(shipImage.width)
+      ctx.drawImage(
+        shipSprite(ship.ownerId),
+        -10, -10 * aspect, 20, 20 * aspect)
       ctx.restore()
 
   ctx.fillStyle = HudColor
